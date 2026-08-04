@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>QSC巡回チェック</title>
+  <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+  <main class="app-shell">
+    <section class="container narrow">
+      <div class="hero">
+        <p class="eyebrow">QSCチェック</p>
+        <h1>QSC巡回チェック</h1>
+        <p>店舗の品質確認・改善管理</p>
+      </div>
+      <div class="grid" style="margin-top:18px">
+        <a class="primary-btn full" href="inspection/new/">新しい巡回を開始</a>
+        <a class="menu-link" href="sample/">サンプル結果報告を見る</a>
+        <a class="menu-link" href="history/">過去の巡回結果</a>
+        <a class="menu-link" href="stores/">店舗管理</a>
+        <a class="menu-link" href="items/">チェック項目管理</a>
+        <a class="menu-link" href="settings/">設定</a>
+      </div>
+    </section>
+  </main>
+  <div id="bottomNav"></div>
+  <script>window.QSC_BASE="./";</script>
+  <script src="assets/js/defaults.js"></script>
+  <script src="assets/js/storage.js"></script>
+  <script src="assets/js/common.js"></script>
+  <script>
+    QSCStorage.init();
+    document.getElementById("bottomNav").innerHTML = QSC.nav("home");
+  </script>
+</body>
+</html>
