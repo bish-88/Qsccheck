@@ -1,37 +1,1668 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-  <title>QSC巡回チェック</title>
-  <link rel="stylesheet" href="assets/css/style.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>AI.CO 週次検証（白島二・原田南）</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js" integrity="sha384-CjloA8y00+1SDAUkjs099PVfnY2KmDC2BZnws9kh8D/lX1s46w6EPhpXdqMfjK6i" crossorigin="anonymous"></script>
+<script src="data.enc.js"></script>
+<style>
+:root{--color-bg:#f7f7f5;--color-panel:#ffffff;--color-fg:#1f2328;--color-fg-muted:#656d76;--color-border-line:#e3e3df;--color-ok:#1a7f37;--color-bad:#cf222e;
+--cds-chart-grid:#ececea;--cds-chart-axis:#9aa0a6;--cds-chart-muted:#b4b8bd;--cds-chart-reference:#8c9196;--cds-border:#d8d8d4;--cds-surface-popover:#ffffff;--cds-text-secondary:#656d76;
+--cds-shadow-popover:0 4px 16px rgba(0,0,0,.12);--cds-radius:10px;--cds-font-size-caption:12px;--cds-font-size-body:14px;--cds-font-size-heading:16px;--cds-font-size-title:26px;--cds-font-weight-medium:600;
+--cds-gap-xs:4px;--cds-gap-sm:8px;--cds-gap-md:14px;--cds-gap-lg:20px;--cds-gap-xl:28px;--cds-pad-xs:4px;--cds-pad-sm:8px;--cds-pad-md:12px;--cds-pad-lg:18px;--cds-pad-xl:28px;--cds-dur-slow:.3s;
+--font-anthropic-sans:"Hiragino Sans","Noto Sans JP","Yu Gothic UI","Meiryo",system-ui,sans-serif;--font-anthropic-serif:"Hiragino Mincho ProN","Noto Serif JP","Yu Mincho",Georgia,serif;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--color-bg:#151618;--color-panel:#1e2023;--color-fg:#e8e8e6;--color-fg-muted:#9ba1a8;--color-border-line:#33363a;--color-ok:#57c26d;--color-bad:#ff6b6b;
+--cds-chart-grid:#2a2d31;--cds-chart-axis:#6b7178;--cds-chart-muted:#5f656c;--cds-chart-reference:#7a8087;--cds-border:#3a3d42;--cds-surface-popover:#25282c;--cds-text-secondary:#9ba1a8;--cds-shadow-popover:0 4px 16px rgba(0,0,0,.5);color-scheme:dark}}
+[hidden]{display:none!important}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--color-bg);color:var(--color-fg);font-family:var(--font-anthropic-sans);font-size:14px}
+body{padding:24px 16px 48px}
+.dash-skeleton{color:transparent;background:var(--cds-chart-grid);border-radius:6px}
+</style>
 </head>
 <body>
-  <main class="app-shell">
-    <section class="container narrow">
-      <div class="hero">
-        <p class="eyebrow">QSCチェック</p>
-        <h1>QSC巡回チェック</h1>
-        <p>店舗の品質確認・改善管理</p>
+<script>
+/* GitHub Pages 用：ダッシュボード本体の dash の代わりに、パスワードで復号したデータを読む小さな実装 */
+(() => {
+  let raw = {};
+  const calcs = {}, memo = {}, subs = [];
+  const get = (id) => {
+    if (id in memo) return memo[id];
+    if (id in raw) return (memo[id] = raw[id]);
+    if (id in calcs) {
+      const c = calcs[id], args = c.inputs.map(get);
+      if (args.some((a) => a === undefined)) return undefined; // 復号前は「まだない」扱いにする
+      return (memo[id] = c.fn(...args));
+    }
+    return undefined;
+  };
+  window.dash = {
+    colors: ['#2f6fdf', '#d9480f', '#2b8a3e', '#7048e8', '#c2255c', '#0b7285', '#e67700', '#5c6670'],
+    calc: (id, o) => { calcs[id] = o; },
+    data: (id) => { let d; try { d = get(id); } catch (e) { console.error(id, e); return { status: 'error', data: [], message: String(e) }; }
+      return d === undefined ? { status: 'missing', data: [] } : { status: 'ok', data: d, columns: Array.isArray(d) && d[0] ? Object.keys(d[0]) : [], meta: [] }; },
+    onData: (fn) => { subs.push(fn); fn(); },
+    setLink: (n) => { try { history.replaceState(null, '', '#' + n); } catch (e) {} },
+    params: () => ({}), setParams: () => {}, resetParams: () => {}, refresh: () => {},
+    load: (obj) => { raw = obj || {}; Object.keys(memo).forEach((k) => delete memo[k]); subs.forEach((f) => f()); },
+  };
+  // 幅が変わったときだけ描き直す（スマホのスクロールでアドレスバーが伸び縮みしても描き直さない）
+  let t, lastW = window.innerWidth;
+  window.addEventListener('resize', () => { if (window.innerWidth === lastW) return; lastW = window.innerWidth; clearTimeout(t); t = setTimeout(() => subs.forEach((f) => f()), 150); });
+})();
+</script>
+<style>
+/* Layout: one column; header with week picker, then tab bar; each tab = summary first, detail below. */
+/* Look: a store ledger. Quiet panels, one serif voice for headline numbers, semantic color only for good/bad. */
+.ac{--ac-tint:color-mix(in srgb, var(--color-fg) 4%, transparent);--ac-good-bg:color-mix(in srgb, var(--color-ok) 13%, transparent);--ac-bad-bg:color-mix(in srgb, var(--color-bad) 12%, transparent);max-width:1180px;margin-inline:auto;display:flex;flex-direction:column;gap:var(--cds-gap-xl);font-family:var(--font-anthropic-sans);color:var(--color-fg);font-variant-numeric:tabular-nums}
+.ac-top{display:flex;flex-direction:column;gap:var(--cds-gap-md)}
+.ac-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:var(--cds-gap-md)}
+.ac-head-text{min-width:0;flex:1 1 30rem;display:flex;flex-direction:column;gap:var(--cds-gap-xs)}
+.ac-eyebrow{font-size:var(--cds-font-size-caption);color:var(--color-fg-muted);letter-spacing:.04em}
+.ac-title{font-family:var(--font-anthropic-serif);font-weight:400;font-size:var(--cds-font-size-title);margin:0;text-wrap:balance}
+.ac-take-box{background:var(--ac-tint);border-radius:var(--cds-radius);padding:var(--cds-pad-md) var(--cds-pad-lg);display:flex;flex-direction:column;gap:var(--cds-gap-xs)}
+.ac-take-l{font-size:var(--cds-font-size-caption);color:var(--color-fg-muted);letter-spacing:.06em}
+.ac-take{margin:0;font-size:var(--cds-font-size-body);line-height:1.8;max-width:64rem}
+.ac-take b{font-weight:600}
+.ac-ctl{display:flex;flex-direction:column;gap:var(--cds-gap-xs);font-size:var(--cds-font-size-caption);color:var(--color-fg-muted)}
+.ac-ctl select{font:inherit;font-size:var(--cds-font-size-body);font-weight:600;color:var(--color-fg);background:var(--color-panel);border:1px solid var(--color-border-line);border-radius:999px;padding:var(--cds-pad-xs) var(--cds-pad-md);cursor:pointer}
+.ac-tabs{display:flex;gap:4px;padding:4px;background:var(--ac-tint);border-radius:calc(var(--cds-radius) + 4px);overflow-x:auto;scrollbar-width:none}
+.ac-tab{font:inherit;font-size:var(--cds-font-size-body);background:none;border:1px solid transparent;border-radius:var(--cds-radius);color:var(--color-fg-muted);padding:var(--cds-pad-xs) var(--cds-pad-md);cursor:pointer;white-space:nowrap;flex:1 0 auto}
+.ac-tab:hover{color:var(--color-fg)}
+.ac-tab[aria-selected="true"]{color:var(--color-fg);background:var(--color-panel);border-color:var(--color-border-line);font-weight:600;box-shadow:0 1px 2px color-mix(in srgb, var(--color-fg) 8%, transparent)}
+.ac-tab:focus-visible,.ac-chip:focus-visible,.ac-th-btn:focus-visible{outline:2px solid var(--color-fg);outline-offset:2px}
+.ac-page{display:flex;flex-direction:column;gap:var(--cds-gap-lg)}
+.ac-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,13rem),1fr));gap:var(--cds-gap-md)}
+.ac-kpi{background:var(--color-panel);border:1px solid var(--color-border-line);border-radius:var(--cds-radius);padding:var(--cds-pad-lg);display:flex;flex-direction:column;gap:var(--cds-gap-xs);min-width:0}
+.ac-spark{height:36px;margin-top:var(--cds-gap-xs)}
+.ac-spark svg{display:block}
+.ac-delta{display:inline-flex;align-items:center;gap:2px;padding:0 .5rem;border-radius:999px;font-weight:600;background:var(--ac-tint);color:var(--color-fg-muted)}
+.ac-delta.ac-neg{background:var(--ac-bad-bg);color:var(--color-bad)}
+.ac-delta.ac-pos{background:var(--ac-good-bg);color:var(--color-ok)}
+.ac-kpi-l{font-size:var(--cds-font-size-caption);color:var(--color-fg-muted)}
+.ac-kpi-v{font-family:var(--font-anthropic-serif);font-weight:400;font-size:var(--cds-font-size-title);line-height:1.15}
+.ac-kpi-s{font-size:var(--cds-font-size-caption);color:var(--color-fg-muted);display:flex;flex-wrap:wrap;align-items:center;gap:.35rem}
+.ac-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,26rem),1fr));gap:var(--cds-gap-md)}
+.ac-card{background:var(--color-panel);border:1px solid var(--color-border-line);border-radius:var(--cds-radius);padding:var(--cds-pad-lg);display:flex;flex-direction:column;gap:var(--cds-gap-md);min-width:0}
+.ac-card > .ac-note:first-of-type{margin-top:calc(-1 * var(--cds-gap-sm))}
+.ac-card h2{margin:0;font-size:var(--cds-font-size-heading);font-weight:var(--cds-font-weight-medium)}
+.ac-note{margin:0;font-size:var(--cds-font-size-caption);color:var(--color-fg-muted);line-height:1.6}
+.ac-section{margin:0;font-size:var(--cds-font-size-heading);font-weight:var(--cds-font-weight-medium)}
+.ac-scroll{overflow-x:auto}
+.ac-table{width:100%;border-collapse:collapse;font-size:var(--cds-font-size-caption)}
+.ac-table th,.ac-table td{padding:var(--cds-pad-xs) var(--cds-pad-sm);text-align:right;white-space:nowrap;border-bottom:1px solid var(--color-border-line)}
+.ac-table th:first-child,.ac-table td:first-child{text-align:left}
+.ac-table th{font-weight:500;color:var(--color-fg-muted);vertical-align:bottom;background:var(--ac-tint);line-height:1.35}
+.ac-table thead th:first-child{border-top-left-radius:6px}.ac-table thead th:last-child{border-top-right-radius:6px}
+.ac-scroll .ac-table td:first-child{position:sticky;left:0;background:var(--color-panel);z-index:1}
+.ac-rank{display:inline-grid;place-items:center;width:1.4rem;height:1.4rem;border-radius:50%;background:var(--ac-tint);font-size:var(--cds-font-size-caption);font-weight:600;margin-right:.5rem}
+.ac-inbar{display:inline-block;height:.45rem;border-radius:3px;background:var(--color-ok);opacity:.5;margin-left:.45rem;vertical-align:middle}
+.ac-table tbody tr:hover td{background:var(--ac-tint)}
+.ac-scroll .ac-table tbody tr:hover td:first-child{background:color-mix(in srgb, var(--color-fg) 4%, var(--color-panel))}
+.ac-tall{max-height:34rem;overflow:auto}
+.ac-tall th{position:sticky;top:0;background:var(--color-panel);z-index:1}
+.ac-th-btn{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+.ac-neg{color:var(--color-bad)}
+.ac-pos{color:var(--color-ok)}
+.ac-dot{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;margin-right:.4rem;vertical-align:baseline}
+.ac-chips{display:flex;flex-wrap:wrap;gap:var(--cds-gap-xs)}
+.ac-chip{font:inherit;font-size:var(--cds-font-size-caption);border:1px solid var(--color-border-line);background:var(--color-bg);color:var(--color-fg);border-radius:999px;padding:var(--cds-pad-xs) var(--cds-pad-md);cursor:pointer}
+.ac-chip[aria-pressed="true"]{background:var(--color-fg);color:var(--color-bg);border-color:var(--color-fg)}
+.ac-chart{position:relative;min-height:18rem}
+.ac-chart svg{display:block}
+.ac-tip{position:absolute;pointer-events:none;background:var(--cds-surface-popover);border:1px solid var(--cds-border);border-radius:var(--cds-radius);box-shadow:var(--cds-shadow-popover);padding:var(--cds-pad-xs) var(--cds-pad-sm);font-size:var(--cds-font-size-caption);white-space:nowrap;z-index:5}
+.ac-tip-h{color:var(--cds-text-secondary);margin-bottom:2px}
+.ac-heat td.h{text-align:center;min-width:4.2rem}
+.ac-list{margin:0;padding-left:1.2rem;display:flex;flex-direction:column;gap:var(--cds-gap-sm);font-size:var(--cds-font-size-body);line-height:1.7;max-width:62rem}
+.ac-dl{display:grid;grid-template-columns:max-content 1fr;gap:var(--cds-gap-xs) var(--cds-gap-md);margin:0;font-size:var(--cds-font-size-body);line-height:1.6}
+.ac-dl dt{font-weight:600}
+.ac-dl dd{margin:0;min-width:0}
+.ac-fail{display:flex;align-items:center;justify-content:center;gap:.4rem;min-height:inherit;color:var(--color-fg-muted);font-size:var(--cds-font-size-caption)}
+.ac-fail::before{content:"";width:.375rem;height:.375rem;border-radius:50%;background:var(--color-bad)}
+[data-dash-source-state=empty]{color:transparent}
+[data-dash-source-state=refreshing]{opacity:.5;transition:opacity var(--cds-dur-slow)}
+.ac-mx td{vertical-align:top}
+.ac-mx td .v{display:block;font-size:var(--cds-font-size-body)}
+.ac-mx td .s{display:block;color:var(--color-fg-muted)}
+.ac-mx td .s.ac-neg{color:var(--color-bad)}
+.ac-mx td.worst{background:var(--ac-bad-bg)}
+.ac-mx td.best{background:var(--ac-good-bg)}
+.ac-mx tfoot td{font-weight:600;border-top:1px solid var(--color-fg-muted)}
+.ac-cmp-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--cds-gap-sm)}
+.ac-legend{display:flex;flex-wrap:wrap;gap:var(--cds-gap-md);font-size:var(--cds-font-size-caption);color:var(--color-fg-muted)}
+.ac-sw{display:inline-block;width:.8rem;height:.8rem;border-radius:3px;margin-right:.3rem;vertical-align:-1px}
+.ac-sim{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,20rem),1fr));gap:var(--cds-gap-lg);align-items:start}
+.ac-sim-ctl{display:flex;flex-direction:column;gap:var(--cds-gap-md);min-width:0}
+.ac-range{display:flex;flex-direction:column;gap:var(--cds-gap-xs);font-size:var(--cds-font-size-caption);color:var(--color-fg-muted)}
+.ac-range-row{display:flex;align-items:center;gap:var(--cds-gap-sm)}
+.ac-range input{flex:1;min-width:0;accent-color:var(--color-fg)}
+.ac-range output{min-width:4.5rem;text-align:right;color:var(--color-fg);font-size:var(--cds-font-size-body)}
+.ac-sim-out{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,10rem),1fr));gap:var(--cds-gap-sm)}
+.ac-sim-out .ac-kpi{padding:var(--cds-pad-md)}
+.ac-btn{font:inherit;font-size:var(--cds-font-size-caption);border:1px solid var(--color-border-line);background:var(--color-bg);color:var(--color-fg);border-radius:var(--cds-radius);padding:var(--cds-pad-xs) var(--cds-pad-md);cursor:pointer;align-self:flex-start}
+.ac-btn:focus-visible{outline:2px solid var(--color-fg);outline-offset:2px}
+.ac-big{font-family:var(--font-anthropic-serif);font-weight:400;font-size:var(--cds-font-size-title);line-height:1.3;margin:0;text-wrap:balance}
+.ac-hero{background:var(--ac-tint);border-color:transparent}
+.ac-hero .ac-big b{font-weight:600}
+.ac-sim-table td{font-size:var(--cds-font-size-body)}
+.ac-sim-table td.gain{font-weight:600;color:var(--color-ok)}
+.ac-bar{height:.7rem;border-radius:4px;background:var(--color-ok);opacity:.55;min-width:2px}
+.ac-barcell{width:28%;min-width:6rem}
+.ac-store-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,15rem),1fr));gap:var(--cds-gap-md)}
+.ac-store{border:1px solid var(--color-border-line);border-radius:var(--cds-radius);padding:var(--cds-pad-md);display:flex;flex-direction:column;gap:var(--cds-gap-xs);min-width:0}
+.ac-store h3{margin:0;font-size:var(--cds-font-size-heading);font-weight:var(--cds-font-weight-medium)}
+.ac-store .meta{font-size:var(--cds-font-size-caption);color:var(--color-fg-muted)}
+.ac-store ol{margin:0;padding-left:1.2rem;display:flex;flex-direction:column;gap:var(--cds-gap-xs);font-size:var(--cds-font-size-body)}
+.ac-store li span{color:var(--color-fg-muted);font-size:var(--cds-font-size-caption)}
+.ac-store li b{color:var(--color-ok);font-weight:600}
+.ac-details summary{cursor:pointer;list-style:revert}
+.ac-details summary h2{display:inline}
+.ac-sub-h{margin:var(--cds-gap-sm) 0 0;font-size:var(--cds-font-size-body);font-weight:var(--cds-font-weight-medium)}
+.ac-mtd th.grp{text-align:center;border-bottom:0}
+.ac-mtd td.d{font-weight:600}
+.ac-mtd tfoot td{font-weight:600;border-top:1px solid var(--color-fg-muted)}
+.ac-mtd th.sep,.ac-mtd td.sep{border-left:1px solid var(--color-border-line)}
+.ac-sr tbody tr.em td,.ac-scroll .ac-sr tbody tr.em td:first-child{font-weight:600;background:color-mix(in srgb, var(--color-fg) 5%, var(--color-panel))}
+@media (max-width:640px){.ac-sr th,.ac-sr td{padding-inline:6px}}
+.ac-sr td.d{font-weight:600}
+.ac-sr-ud{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,20rem),1fr));gap:var(--cds-gap-md)}
+.ac-sr-col{border-radius:var(--cds-radius);padding:var(--cds-pad-md) var(--cds-pad-lg)}
+.ac-sr-col.up{background:var(--ac-good-bg)}.ac-sr-col.down{background:var(--ac-bad-bg)}
+.ac-sr-col h3{margin:0 0 var(--cds-gap-sm);font-size:var(--cds-font-size-body)}
+.ac-sr-col.up h3{color:var(--color-ok)}.ac-sr-col.down h3{color:var(--color-bad)}
+.ac-sr-col ol{margin:0;padding-left:1.2rem;display:flex;flex-direction:column;gap:var(--cds-gap-sm);font-size:var(--cds-font-size-body)}
+.ac-sr-col li .why{display:block;font-size:var(--cds-font-size-caption);color:var(--color-fg-muted)}
+.ac-sr-col li b{font-weight:600}
+.ac-drv{display:inline-block;padding:1px .5rem;border-radius:999px;font-size:var(--cds-font-size-caption);font-weight:600;white-space:nowrap}
+.ac-drv.up{background:var(--ac-good-bg);color:var(--color-ok)}
+.ac-drv.down{background:var(--ac-bad-bg);color:var(--color-bad)}
+.ac-drv.hold{background:var(--ac-tint);color:var(--color-fg-muted)}
+.ac-drv.sku,.ac-drv.over{background:color-mix(in srgb, #e67700 16%, transparent);color:color-mix(in srgb, #e67700 75%, var(--color-fg))}
+.ac-drv-mx td,.ac-drv-mx th{text-align:center}.ac-drv-mx td{cursor:pointer}.ac-drv-mx th:first-child{text-align:left}
+.ac-drv-mx td:first-child{text-align:left;cursor:default}
+.ac-drv-mx td .r{display:block;font-size:var(--cds-font-size-caption);color:var(--color-fg-muted)}
+.ac-drv-hist{letter-spacing:.15em;font-weight:600}
+.ac-drv-hist .up{color:var(--color-ok)}.ac-drv-hist .down{color:var(--color-bad)}.ac-drv-hist .sku,.ac-drv-hist .over{color:#e67700}.ac-drv-hist .hold{color:var(--color-fg-muted)}
+@media (min-width:641px) and (max-width:1000px){.ac-tabs{flex-wrap:wrap;overflow:visible}.ac-tab{flex:1 1 calc(25% - 4px)}}
+.ac-lock{max-width:22rem;margin:12vh auto 0;background:var(--color-panel);border:1px solid var(--color-border-line);border-radius:var(--cds-radius);padding:var(--cds-pad-xl);display:flex;flex-direction:column;gap:var(--cds-gap-md);font-family:var(--font-anthropic-sans);color:var(--color-fg)}
+.ac-lock h1{margin:0;font-family:var(--font-anthropic-serif);font-weight:400;font-size:var(--cds-font-size-title)}
+.ac-lock-row{display:flex;gap:var(--cds-gap-sm)}
+.ac-lock input{flex:1;min-width:0;font:inherit;font-size:var(--cds-font-size-body);letter-spacing:.3em;color:var(--color-fg);background:var(--color-bg);border:1px solid var(--color-border-line);border-radius:var(--cds-radius);padding:var(--cds-pad-sm) var(--cds-pad-md)}
+.ac-lock input:focus-visible{outline:2px solid var(--color-fg);outline-offset:1px}
+.ac-lock button{font:inherit;font-weight:600;color:var(--color-bg);background:var(--color-fg);border:0;border-radius:var(--cds-radius);padding:var(--cds-pad-sm) var(--cds-pad-lg);cursor:pointer}
+.ac-lock-err{margin:0;min-height:1.2em;font-size:var(--cds-font-size-caption);color:var(--color-bad)}
+.ac-sub{margin:0;font-size:var(--cds-font-size-caption);color:var(--color-fg-muted);line-height:1.6}
+.ac-title:focus{outline:none}
+.ac-lock-l{font-size:var(--cds-font-size-caption);color:var(--color-fg-muted);margin-bottom:calc(-1 * var(--cds-gap-sm))}
+.ac-lock button:disabled,.ac-lock input:disabled{opacity:.6;cursor:progress}
+.ac-lock button:focus-visible{outline:2px solid var(--color-fg);outline-offset:2px}
+.ac-ctl select:focus-visible,.ac-range input:focus-visible,.ac-details summary:focus-visible{outline:2px solid var(--color-fg);outline-offset:2px;border-radius:4px}
+/* タブ：PCではスクロールしても上に残す。背景は不透明にして下の内容が透けないようにする */
+.ac-tabs{position:sticky;top:0;z-index:10;background:color-mix(in srgb, var(--color-fg) 4%, var(--color-bg))}
+.ac-tab{min-height:36px}
+.ac-chip{min-height:36px;display:inline-flex;align-items:center}
+.ac-chip:hover{border-color:var(--color-fg-muted)}
+/* 指で操作する端末では、押せる部品を40px以上にする */
+@media (pointer:coarse){.ac-tab,.ac-chip,.ac-btn,.ac-ctl select{min-height:40px}.ac-th-btn{min-height:32px}}
+@media (max-width:640px){
+  .ac-hide-sm{display:none}
+  body{padding:16px 12px 40px}
+  .ac{gap:var(--cds-gap-lg)}
+  .ac-title{font-size:22px}
+  /* 7つのタブを横スクロールで隠さず、折り返して全部見せる */
+  .ac-tabs{position:static;flex-wrap:wrap;overflow:visible}
+  .ac-tab{flex:1 1 calc(33% - 4px);padding-inline:var(--cds-pad-sm)}
+  .ac-ctl{width:100%}.ac-ctl select{width:100%}
+  /* KPIは2列にして、縦に長くなりすぎないようにする */
+  .ac-kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--cds-gap-sm)}
+  .ac-kpi{padding:var(--cds-pad-md)}
+  .ac-kpi-v{font-size:22px}
+  .ac-card{padding:var(--cds-pad-md)}
+  .ac-big{font-size:20px}
+}
+</style>
+
+<form class="ac-lock" id="lock" autocomplete="off">
+  <h1>AI.CO 週次検証</h1>
+  <p class="ac-note">白島二・原田南の AI.CO カテゴリの週次結果です。社内向けのため、パスワードを入力してください。</p>
+  <label class="ac-lock-l" for="lock-pw">パスワード</label>
+  <div class="ac-lock-row">
+    <input id="lock-pw" type="password" inputmode="numeric" autocomplete="current-password" aria-describedby="lock-err" required>
+    <button type="submit" id="lock-go">開く</button>
+  </div>
+  <p class="ac-lock-err" id="lock-err" role="alert" aria-live="assertive"></p>
+</form>
+
+<main class="ac" id="ac-main" hidden>
+  <div class="ac-top">
+    <header class="ac-head">
+      <div class="ac-head-text">
+        <div class="ac-eyebrow">AI.COカテゴリ ／ 白島二・原田南 ／ お店づくりレポート②</div>
+        <h1 class="ac-title" id="title" tabindex="-1">AI.CO 週次検証</h1>
+        <p class="ac-sub" id="coverage">2店舗の週次レポートを週ごとに積み上げて、販売・値引・廃棄・荒利益を比べます。</p>
       </div>
-      <div class="grid" style="margin-top:18px">
-        <a class="primary-btn full" href="inspection/new/">新しい巡回を開始</a>
-        <a class="menu-link" href="sample/">サンプル結果報告を見る</a>
-        <a class="menu-link" href="history/">過去の巡回結果</a>
-        <a class="menu-link" href="stores/">店舗管理</a>
-        <a class="menu-link" href="items/">チェック項目管理</a>
-        <a class="menu-link" href="settings/">設定</a>
+      <label class="ac-ctl" for="week-pick" id="week-ctl">表示する週
+        <select id="week-pick"></select>
+      </label>
+    </header>
+    <div class="ac-take-box" id="take-box">
+      <span class="ac-take-l">この週のポイント</span>
+      <p class="ac-take" id="takeaway"><span class="dash-skeleton">—</span></p>
+    </div>
+  </div>
+
+  <div class="ac-tabs" role="tablist" aria-label="ページ">
+    <button type="button" class="ac-tab" role="tab" id="tab-overview" data-page="overview" aria-controls="overview" aria-selected="true" tabindex="0">2店舗サマリー</button>
+    <button type="button" class="ac-tab" role="tab" id="tab-compare" data-page="compare" aria-controls="compare" aria-selected="false" tabindex="-1">週別の比較</button>
+    <button type="button" class="ac-tab" role="tab" id="tab-sim" data-page="sim" aria-controls="sim" aria-selected="false" tabindex="-1">改善シミュレーション</button>
+    <button type="button" class="ac-tab" role="tab" id="tab-support" data-page="support" aria-controls="support" aria-selected="false" tabindex="-1">本部支援</button>
+    <button type="button" class="ac-tab" role="tab" id="tab-store" data-page="store" aria-controls="store" aria-selected="false" tabindex="-1">店舗別</button>
+    <button type="button" class="ac-tab" role="tab" id="tab-month" data-page="month" aria-controls="month" aria-selected="false" tabindex="-1">月次</button>
+    <button type="button" class="ac-tab" role="tab" id="tab-driver" data-page="driver" aria-controls="driver" aria-selected="false" tabindex="-1">ドライバ検証</button>
+    <button type="button" class="ac-tab" role="tab" id="tab-notes" data-page="notes" aria-controls="notes" aria-selected="false" tabindex="-1">見方と所見</button>
+  </div>
+
+  <!-- 2店舗サマリー -->
+  <section class="ac-page" id="overview" role="tabpanel" aria-labelledby="tab-overview">
+    <div class="ac-kpis">
+      <div class="ac-kpi" id="kpi-sales"><span class="ac-kpi-l">2店合計 販売高</span><span class="ac-kpi-v dash-skeleton" data-source="week_sum" data-field="sales">—</span><span class="ac-kpi-s">前週比 <span class="ac-delta" data-source="week_sum" data-field="sales_wow">—</span></span><div class="ac-spark" data-source="week_sum"></div></div>
+      <div class="ac-kpi" id="kpi-gp"><span class="ac-kpi-l">2店合計 荒利益高</span><span class="ac-kpi-v dash-skeleton" data-source="week_sum" data-field="gross_profit">—</span><span class="ac-kpi-s">前週比 <span class="ac-delta" data-source="week_sum" data-field="gp_wow">—</span></span><div class="ac-spark" data-source="week_sum"></div></div>
+      <div class="ac-kpi" id="kpi-gprate"><span class="ac-kpi-l">2店合計 荒利率（荒利益高÷販売高）</span><span class="ac-kpi-v dash-skeleton" data-source="week_sum" data-field="gp_rate">—</span><span class="ac-kpi-s">前週差 <span class="ac-delta" data-source="week_sum" data-field="gp_rate_diff">—</span></span><div class="ac-spark" data-source="week_sum"></div></div>
+      <div class="ac-kpi" id="kpi-loss"><span class="ac-kpi-l">2店合計 ロス額（値引＋廃棄）</span><span class="ac-kpi-v dash-skeleton" data-source="week_sum" data-field="loss">—</span><span class="ac-kpi-s">ロス率 <span class="lr" data-source="week_sum" data-field="loss_rate">—</span> 前週差 <span class="lrd ac-delta" data-source="week_sum" data-field="loss_rate_diff">—</span></span><div class="ac-spark" data-source="week_sum"></div></div>
+    </div>
+
+    <div class="ac-card" id="scorecard">
+      <h2>店舗スコアカード</h2>
+      <p class="ac-note" id="scorecard-note">選んだ週の2店舗を荒利率の高い順に並べています。前年比が100%未満の数字は赤です。</p>
+      <div class="ac-scroll">
+        <table class="ac-table" id="score-table" data-source="weekly_total" data-row-key="key">
+          <thead><tr>
+            <th data-field="store">店舗</th>
+            <th data-field="sales">販売高</th>
+            <th data-field="sales_yoy">販売前年比</th>
+            <th data-field="discount">値引高</th>
+            <th data-source="store_week" data-field="discount_rate">値引率</th>
+            <th data-field="waste">廃棄高</th>
+            <th data-source="store_week" data-field="waste_rate">廃棄率</th>
+            <th data-source="store_week" data-field="loss">ロス額<br>（値引＋廃棄）</th>
+            <th data-source="store_week" data-field="loss_rate">ロス率<br>（÷販売高）</th>
+            <th data-source="store_week" data-field="sell_rate">販売率</th>
+            <th data-field="gross_profit">荒利益高</th>
+            <th data-field="gp_yoy">荒利前年比</th>
+            <th data-source="store_week" data-field="gp_rate">荒利率</th>
+            <th data-field="discount_sku_match" class="ac-hide-sm">値引SKU一致</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
       </div>
-    </section>
-  </main>
-  <div id="bottomNav"></div>
-  <script>window.QSC_BASE="./";</script>
-  <script src="assets/js/defaults.js"></script>
-  <script src="assets/js/storage.js"></script>
-  <script src="assets/js/common.js"></script>
-  <script>
-    QSCStorage.init();
-    document.getElementById("bottomNav").innerHTML = QSC.nav("home");
-  </script>
+    </div>
+
+    <div class="ac-grid">
+      <div class="ac-card" id="gp-trend-card">
+        <h2>荒利前年比の週推移</h2>
+        <p class="ac-note">点線は前年並み（100%）。線の右端に最新週の値を出しています。</p>
+        <div class="ac-chart" id="gp-trend" data-source="weekly_total"></div>
+      </div>
+      <div class="ac-card" id="loss-card">
+        <h2>ロス率と荒利率</h2>
+        <p class="ac-note">選んだ週の店舗ごとの位置です。左上ほど、値引と廃棄が少なく荒利が残っています。</p>
+        <div class="ac-chart" id="loss-scatter" data-source="store_week"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 週別の比較 -->
+  <section class="ac-page" id="compare" role="tabpanel" aria-labelledby="tab-compare" hidden>
+    <p class="ac-note">値引・廃棄・荒利益高を、2店舗×週で別々に並べています。表の上段が金額、下段が販売高に対する率です。各週で最も悪い店を赤、最も良い店を緑の背景にしています。</p>
+    <div class="ac-legend" aria-label="凡例"><span><span class="ac-sw" style="background:color-mix(in srgb, var(--color-bad) 12%, transparent)"></span>その週で最も悪い店</span><span><span class="ac-sw" style="background:color-mix(in srgb, var(--color-ok) 12%, transparent)"></span>その週で最も良い店</span></div>
+    <div class="ac-card" id="cmp-discount">
+      <div class="ac-cmp-head"><h2>値引の状況</h2><div class="ac-chips" role="group" aria-label="グラフの指標"></div></div>
+      <p class="ac-note">値引率 ＝ 値引高 ÷ 販売高。低いほど、値引に頼らず売れています。</p>
+      <div class="ac-chart" data-source="weekly_total store_week"></div>
+      <div class="ac-scroll"><table class="ac-table ac-mx"><thead></thead><tbody></tbody><tfoot></tfoot></table></div>
+    </div>
+    <div class="ac-card" id="cmp-waste">
+      <div class="ac-cmp-head"><h2>廃棄の状況</h2><div class="ac-chips" role="group" aria-label="グラフの指標"></div></div>
+      <p class="ac-note">廃棄率 ＝ 廃棄高 ÷ 販売高。下段の右は廃棄前年比で、少ないほど良い数字です。</p>
+      <div class="ac-chart" data-source="weekly_total store_week"></div>
+      <div class="ac-scroll"><table class="ac-table ac-mx"><thead></thead><tbody></tbody><tfoot></tfoot></table></div>
+    </div>
+    <div class="ac-card" id="cmp-gp">
+      <div class="ac-cmp-head"><h2>荒利益高の状況</h2><div class="ac-chips" role="group" aria-label="グラフの指標"></div></div>
+      <p class="ac-note">荒利率 ＝ 荒利益高 ÷ 販売高。下段の右は荒利前年比で、100%未満は赤です。</p>
+      <div class="ac-chart" data-source="weekly_total store_week"></div>
+      <div class="ac-scroll"><table class="ac-table ac-mx"><thead></thead><tbody></tbody><tfoot></tfoot></table></div>
+    </div>
+  </section>
+
+  <!-- 改善シミュレーション -->
+  <section class="ac-page" id="sim" role="tabpanel" aria-labelledby="tab-sim" hidden>
+    <div class="ac-card ac-hero" id="sim-hero">
+      <p class="ac-big" id="sim-head">値引・廃棄を <b>100円</b> 減らすと、荒利益高は <b id="sim-k">約65円</b> 増えます。</p>
+      <p class="ac-note">売上が同じ場合。2店舗の毎週のデータから計算しています（くわしくは一番下）。</p>
+    </div>
+
+    <div class="ac-card" id="sim-card">
+      <h2>ロスを減らしたら、荒利益高はいくら増える？</h2>
+      <label class="ac-range" for="sim-ratio">ロス（値引＋廃棄）を減らす割合
+        <span class="ac-range-row"><input type="range" id="sim-ratio" min="10" max="50" step="10" value="20"><output id="sim-ratio-o" for="sim-ratio">2割</output></span>
+      </label>
+      <div class="ac-scroll">
+        <table class="ac-table ac-sim-table" id="sim-table" data-source="opportunity" data-row-key="key">
+          <thead><tr>
+            <th data-field="store">店舗</th>
+            <th data-field="loss_day">今のロス／日</th>
+            <th>減らす額／日</th>
+            <th>荒利益高の増加／日</th>
+            <th>1か月（30日）</th>
+            <th class="ac-hide-sm" aria-label="増加の大きさ"></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="ac-note" id="sim-basis">金額は最新の月計（1日あたり）をもとにしています。</p>
+    </div>
+
+    <div class="ac-card" id="sim-cats">
+      <h2>まずここから：ロスが大きいカテゴリ</h2>
+      <p class="ac-note">店ごとに、ロス額（値引＋廃棄）が大きいカテゴリ上位3つです。上で選んだ割合だけ減らした場合の増加額を出しています。</p>
+      <div class="ac-store-grid" id="sim-cat-grid"></div>
+    </div>
+
+    <details class="ac-card ac-details" id="model-card">
+      <summary><h2>計算の根拠（くわしく）</h2></summary>
+      <p class="ac-note">全店舗・全週のデータで「荒利率 ＝ 基本の荒利率 − 値引の影響 − 廃棄の影響」という式を当てはめました（重回帰）。週のデータが増えるたびに自動で計算し直します。</p>
+      <div class="ac-kpis">
+        <div class="ac-kpi"><span class="ac-kpi-l">値引を1円減らすと</span><span class="ac-kpi-v" id="m-bd" data-source="gp_model" data-field="gain_per_discount_yen" data-row="0">—</span><span class="ac-kpi-s">荒利益高が増える額</span></div>
+        <div class="ac-kpi"><span class="ac-kpi-l">廃棄を1円減らすと</span><span class="ac-kpi-v" id="m-bw" data-source="gp_model" data-field="gain_per_waste_yen" data-row="0">—</span><span class="ac-kpi-s">荒利益高が増える額</span></div>
+        <div class="ac-kpi"><span class="ac-kpi-l">式の当てはまり</span><span class="ac-kpi-v" id="m-r2" data-source="gp_model" data-field="r2" data-row="0">—</span><span class="ac-kpi-s">1に近いほど正確（<span id="m-n" data-source="gp_model" data-field="n" data-row="0">—</span>店週、平均誤差 <span id="m-mae" data-source="gp_model" data-field="mae_pt" data-row="0">—</span>）</span></div>
+      </div>
+      <div class="ac-chart" id="fit-chart" data-source="store_week gp_model"></div>
+      <ul class="ac-list">
+        <li>点は1店舗の1週。ロス率が高い週ほど、荒利率がまっすぐ下がっています。点線が式の線です。</li>
+        <li>売上が変わらない前提です。発注を減らしすぎると売り逃しが出ることがあります。</li>
+        <li>同じ店で比べると、ロスが多い週ほど販売前年比は低い傾向でした。売れない週に並べる量を減らせていないことがロスの主な原因です。</li>
+      </ul>
+    </details>
+  </section>
+
+  <!-- 本部支援 -->
+  <section class="ac-page" id="support" role="tabpanel" aria-labelledby="tab-support" hidden>
+    <div class="ac-card ac-hero" id="sup-hero">
+      <p class="ac-big" id="sup-head"><span class="dash-skeleton">—</span></p>
+      <p class="ac-note" id="sup-sub">世界一成長する店舗づくり大作戦 検証レポート（7日間確定値）より。金額は1日平均×日数で求めた期間合計です。</p>
+    </div>
+
+    <div class="ac-kpis">
+      <div class="ac-kpi"><span class="ac-kpi-l">2店のロス（値引＋廃棄）28日</span><span class="ac-kpi-v" id="sup-k1" data-source="support_period">—</span><span class="ac-kpi-s">売価ベース</span></div>
+      <div class="ac-kpi"><span class="ac-kpi-l">もらった本部支援 28日（売価）</span><span class="ac-kpi-v" id="sup-k2" data-source="support_period">—</span><span class="ac-kpi-s" id="sup-k2s">—</span></div>
+      <div class="ac-kpi"><span class="ac-kpi-l">本部支援額（原価・精算書の額）</span><span class="ac-kpi-v" id="sup-k3" data-source="support_period">—</span><span class="ac-kpi-s">荒利益に加わる額</span></div>
+      <div class="ac-kpi"><span class="ac-kpi-l">支援を引いた残りのロス 28日</span><span class="ac-kpi-v" id="sup-k4" data-source="support_period">—</span><span class="ac-kpi-s">お店が負担している分</span></div>
+    </div>
+
+    <div class="ac-card" id="sup-table-card">
+      <h2 id="sup-table-title">店舗ごと：ロスと支援</h2>
+      <p class="ac-note">カバー率 ＝ 支援額（売価）÷ ロス額。支援後の前年比が100%未満は赤（荒利）、100%超は赤（ロス）。</p>
+      <div class="ac-scroll">
+        <table class="ac-table" id="sup-table" data-source="support_period" data-row-key="key">
+          <thead><tr>
+            <th data-field="store">店舗</th>
+            <th data-field="loss_28d">ロス額</th>
+            <th data-field="support_baika_28d">支援（売価）</th>
+            <th data-field="cover_rate">カバー率</th>
+            <th data-field="support_B">支援（原価）</th>
+            <th data-field="gp_rate">荒利率<br>支援前</th>
+            <th data-field="gp_after_rate">荒利率<br>支援後</th>
+            <th data-field="gp_after_yoy">支援後荒利<br>前年比</th>
+            <th data-field="loss_after_yoy">支援後ロス<br>前年比</th>
+            <th>判定</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="ac-card" id="sup-week-card">
+      <div class="ac-cmp-head"><h2 id="sup-week-title">週ごとのロスと支援</h2><div class="ac-chips" id="sup-stores" role="group" aria-label="店舗"></div></div>
+      <p class="ac-note">棒＝ロス額（値引＋廃棄、1日）。濃い部分が本部支援でカバーされた額（売価）。</p>
+      <div class="ac-chart" id="sup-chart" data-source="support_weekly"></div>
+      <div class="ac-scroll ac-tall">
+        <table class="ac-table" id="sup-week-table" data-source="support_weekly" data-row-key="key">
+          <thead><tr><th data-field="week_start">週</th><th data-field="sales">販売高</th><th data-field="loss">ロス額</th><th data-field="support_baika">支援（売価）</th><th>カバー率</th><th data-field="gp">荒利 支援前</th><th data-field="gp_after">荒利 支援後</th><th data-field="gp_after_yoy">支援後荒利前年比</th><th data-field="loss_after_yoy">支援後ロス前年比</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="ac-card" id="sup-check">
+      <h2>確認したこと</h2>
+      <ul class="ac-list">
+        <li><b>計算の確認：</b>売変高Ⅲ＝廃棄＋値引、支援後売変＝売変−支援（売価）、支援後荒利＝荒利＋支援（原価）がレポートの値と一致しています。</li>
+        <li><b>以前のデータ（AI.CO週次）との違い：</b>AI.CO週次は火〜日の6日間の速報、このレポートは火〜月の7日間の確定値です。荒利・ロス・支援はこのレポートの確定値を正とします。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 店舗別 -->
+  <section class="ac-page" id="store" role="tabpanel" aria-labelledby="tab-store" hidden>
+    <div class="ac-chips" id="store-chips" role="group" aria-label="店舗"></div>
+
+    <div class="ac-card ac-hero" id="sr-card">
+      <p class="ac-note" id="sr-eyebrow">店舗レポート</p>
+      <p class="ac-big" id="sr-head"><span class="dash-skeleton">—</span></p>
+      <p class="ac-note" id="sr-sub"></p>
+    </div>
+    <div class="ac-grid">
+      <div class="ac-card" id="sr-week-card">
+        <h2 id="sr-week-title">先週との比較（1日あたり）</h2>
+        <p class="ac-note">各週のレポートの「前週」欄（火〜日の6日間）です。</p>
+        <div class="ac-scroll"><table class="ac-table ac-sr" id="sr-week"><thead></thead><tbody></tbody></table></div>
+      </div>
+      <div class="ac-card" id="sr-mtd-card">
+        <h2 id="sr-mtd-title">当月の累計（1日あたり）</h2>
+        <p class="ac-note" id="sr-mtd-note">各週のレポートの「当月」欄です。</p>
+        <div class="ac-scroll"><table class="ac-table ac-sr" id="sr-mtd"><thead></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+    <div class="ac-card" id="sr-cat-card">
+      <h2>先週から荒利益が上がった・下がったカテゴリ</h2>
+      <p class="ac-note">1日あたりの荒利益高の差が大きい順。カッコ内は売上・値引・廃棄の差です。</p>
+      <div class="ac-sr-ud">
+        <div class="ac-sr-col up"><h3>▲ 上がった</h3><ol id="sr-up"></ol></div>
+        <div class="ac-sr-col down"><h3>▼ 下がった</h3><ol id="sr-down"></ol></div>
+      </div>
+    </div>
+
+    <div class="ac-card" id="store-weeks">
+      <h2 id="store-weeks-title">週別の推移</h2>
+      <p class="ac-note">各週の「前週」欄の値です。前年比が100%未満の数字は赤です。</p>
+      <div class="ac-scroll">
+        <table class="ac-table" id="store-week-table" data-source="weekly_total" data-row-key="key">
+          <thead><tr>
+            <th data-field="week_start">週</th>
+            <th data-field="sales">販売高</th>
+            <th data-field="sales_yoy">販売前年比</th>
+            <th data-field="sales_wow">前週比</th>
+            <th data-field="discount">値引高</th>
+            <th data-source="store_week" data-field="discount_rate">値引率</th>
+            <th data-field="waste">廃棄高</th>
+            <th data-source="store_week" data-field="waste_rate">廃棄率</th>
+            <th data-field="waste_yoy">廃棄前年比</th>
+            <th data-source="store_week" data-field="loss">ロス額<br>（値引＋廃棄）</th>
+            <th data-source="store_week" data-field="loss_rate">ロス率<br>（÷販売高）</th>
+            <th data-source="store_week" data-field="sell_rate">販売率</th>
+            <th data-field="gross_profit">荒利益高</th>
+            <th data-field="gp_yoy">荒利前年比</th>
+            <th data-source="store_week" data-field="gp_rate">荒利率</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="ac-card" id="store-yoy-card">
+      <h2>販売前年比と荒利前年比</h2>
+      <p class="ac-note">2本の線の間が開くほど、売上に対して利益が残っていません。</p>
+      <div class="ac-chart" id="store-yoy" data-source="weekly_total"></div>
+    </div>
+
+    <div class="ac-card" id="cat-card">
+      <h2>カテゴリ別</h2>
+      <p class="ac-note">列名を押すと並べ替えます。採用SKU率は推奨SKU数に対して並べたSKU数の割合で、110%以上は推奨より多く並べています。</p>
+      <div class="ac-chips" id="cat-period" role="group" aria-label="期間"></div>
+      <div class="ac-scroll ac-tall">
+        <table class="ac-table" id="cat-table" data-source="weekly_category" data-row-key="key">
+          <thead><tr></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="ac-card" id="heat-card">
+      <h2>カテゴリ別 荒利前年比</h2>
+      <p class="ac-note">緑は前年超え、赤は前年割れ。前年の荒利が小さいかマイナスのカテゴリは極端な値になります。</p>
+      <div class="ac-scroll">
+        <table class="ac-table ac-heat" id="heat-table"><thead><tr></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 月次 -->
+  <section class="ac-page" id="month" role="tabpanel" aria-labelledby="tab-month" hidden>
+    <div class="ac-card" id="mtd-card">
+      <div class="ac-cmp-head"><h2 id="mtd-title">月の途中経過：先週までと今週までの違い</h2><div class="ac-chips" id="mtd-mode" role="group" aria-label="金額の単位"></div></div>
+      <p class="ac-note" id="mtd-note">週次レポートの「当月」欄を、先週のレポートと今週のレポートで比べます。</p>
+      <div class="ac-scroll">
+        <table class="ac-table ac-mtd" id="mtd-table" data-source="mtd_total" data-row-key="key"><thead></thead><tbody></tbody><tfoot></tfoot></table>
+      </div>
+      <h3 class="ac-sub-h" id="mtd-cat-title">カテゴリ別の違い</h3>
+      <div class="ac-chips" id="mtd-stores" role="group" aria-label="店舗"></div>
+      <div class="ac-scroll ac-tall">
+        <table class="ac-table ac-mtd" id="mtd-cat-table" data-source="mtd_category" data-row-key="key"><thead></thead><tbody></tbody></table>
+      </div>
+    </div>
+    <div class="ac-card" id="month-table-card">
+      <h2>月計（週次レポートの当月欄）</h2>
+      <p class="ac-note">週次レポートの「当月」欄の値（1店1日あたり）です。月の途中は、その日までの合計です。前年比が100%未満の数字は赤です。</p>
+      <div class="ac-chips" id="month-pick" role="group" aria-label="月"></div>
+      <div class="ac-scroll">
+        <table class="ac-table" id="month-table" data-source="monthly_total" data-row-key="key">
+          <thead><tr>
+            <th data-field="store">店舗</th>
+            <th data-field="month">月</th>
+            <th data-field="sales">販売高</th>
+            <th data-field="sales_yoy">販売前年比</th>
+            <th data-field="discount">値引高</th>
+            <th data-source="month_rates" data-field="discount_rate">値引率</th>
+            <th data-field="waste">廃棄高</th>
+            <th data-source="month_rates" data-field="waste_rate">廃棄率</th>
+            <th data-source="month_rates" data-field="loss">ロス額<br>（値引＋廃棄）</th>
+            <th data-source="month_rates" data-field="loss_rate">ロス率<br>（÷販売高）</th>
+            <th data-source="month_rates" data-field="sell_rate">販売率</th>
+            <th data-field="gross_profit">荒利益高</th>
+            <th data-field="gp_yoy">荒利前年比</th>
+            <th data-source="month_rates" data-field="gp_rate">荒利率</th>
+            <th id="month-diff-h">荒利率<br>前月差</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="ac-card" id="month-trend-card">
+      <h2>月次検証レポートの前年比推移</h2>
+      <p class="ac-note">月次検証レポート下部のグラフの値です。点線が比較店（支店平均）。</p>
+      <div class="ac-chips" id="month-metric" role="group" aria-label="指標"></div>
+      <div class="ac-chart" id="month-trend" data-source="monthly_trend"></div>
+    </div>
+  </section>
+
+  <!-- ドライバ検証 -->
+  <section class="ac-page" id="driver" role="tabpanel" aria-labelledby="tab-driver" hidden>
+    <div class="ac-card ac-hero">
+      <p class="ac-note" id="drv-eyebrow">ドライバ検証</p>
+      <p class="ac-big" id="drv-head"><span class="dash-skeleton">—</span></p>
+      <p class="ac-note">選んだ週の「前週」欄のカテゴリ別の数字で判定しています。上の「表示する週」で週を変えられます。</p>
+    </div>
+    <div class="ac-card" id="drv-rules">
+      <h2>判定のルール</h2>
+      <dl class="ac-dl">
+        <dt>販売率</dt><dd>販売高 ÷（販売高 ＋ 値引高 ＋ 廃棄高）。並べた量のうち売れた割合です。</dd>
+        <dt>ロス率</dt><dd>（値引高 ＋ 廃棄高）÷ 販売高。</dd>
+        <dt><span class="ac-drv up">▲ 上げるべき</span></dt><dd>次の3つがそろったときだけ：販売率が90%より上、採用SKUが100%以下、ロス率（値引＋廃棄）が8%以下。売れ残りが少なく、もっと並べても売れる余地があります。</dd>
+        <dt><span class="ac-drv hold">→ 上げない</span></dt><dd>販売率は90%より上でも、ロス率（値引＋廃棄）が8%を超えている。上げるとロスが増えるため、今のまま。</dd>
+        <dt><span class="ac-drv down">▼ 下げる検討</span></dt><dd>販売率が90%以下で、採用SKUが100%。品揃えは推奨どおりなのに売れ残っているので、ドライバを下げる候補です。</dd>
+        <dt><span class="ac-drv over">SKU多い</span></dt><dd>採用SKUが100%を超えている。推奨より多く並べているので、ドライバを上げる前（販売率90%超）でも下げる前（90%以下）でも、まず推奨（100%）にそろえます。</dd>
+        <dt><span class="ac-drv sku">SKU不足</span></dt><dd>販売率が90%以下で、採用SKUが100%未満。ドライバを触る前に、まず採用SKUを100%にそろえて確認します。</dd>
+      </dl>
+    </div>
+    <div class="ac-card" id="drv-matrix-card">
+      <h2 id="drv-matrix-title">カテゴリ × 店舗の判定</h2>
+      <p class="ac-note">数字は販売率。マスを押すと、その店の詳しい表に切り替わります。</p>
+      <div class="ac-scroll"><table class="ac-table ac-drv-mx" id="drv-matrix"><thead></thead><tbody></tbody></table></div>
+    </div>
+    <div class="ac-card" id="drv-detail-card">
+      <div class="ac-cmp-head"><h2 id="drv-detail-title">店舗の詳細</h2><div class="ac-chips" id="drv-stores" role="group" aria-label="店舗"></div></div>
+      <p class="ac-note">「直近4週」は、選んだ週までの4週の判定です（左が古い週）。同じ判定が続くカテゴリほど、確実に手を打てます。</p>
+      <div class="ac-scroll"><table class="ac-table" id="drv-table"><thead><tr><th>カテゴリ</th><th>販売高</th><th>値引高</th><th>廃棄高</th><th>販売率</th><th>ロス率<br>（値引＋廃棄）÷販売高</th><th>採用SKU率</th><th>判定</th><th>直近4週</th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- 見方と所見 -->
+  <section class="ac-page" id="notes" role="tabpanel" aria-labelledby="tab-notes" hidden>
+    <div class="ac-card" id="defs">
+      <h2>指標の見方</h2>
+      <dl class="ac-dl">
+        <dt>荒利率</dt><dd>荒利益高 ÷ 販売高。店の利益の残り方を、売上の大きさに関係なく比べられます。</dd>
+        <dt>ロス額</dt><dd>値引高 ＋ 廃棄高。売り切れずに値引きした分と、捨てた分の合計です。</dd>
+        <dt>ロス率</dt><dd>ロス額 ÷ 販売高。売上の大きさが違う店どうしで、ロス額を比べるための率です。</dd>
+        <dt>販売率</dt><dd>販売高 ÷（販売高 ＋ 廃棄高 ＋ 値引高）。レポートの販売率と同じ式で、並べた量のうち売れた割合です。</dd>
+        <dt>値引率</dt><dd>値引高 ÷ 販売高。</dd>
+        <dt>廃棄率</dt><dd>廃棄高 ÷ 販売高。低いほど、捨てずに売れています。</dd>
+        <dt>前年比</dt><dd>レポートの値をそのまま載せています。100%未満は赤で表示します。廃棄前年比は少ないほど良い数字なので色を付けていません。</dd>
+        <dt>採用SKU率</dt><dd>推奨SKU数に対して実際に並べたSKU数。品揃えを推奨どおりにしているかを示します。</dd>
+        <dt>値引SKU一致</dt><dd>値引が推奨されたSKUのうち、実際に値引したSKUの割合（週次レポートの定義）。</dd>
+        <dt>金額の単位</dt><dd>レポートの表記どおりです。月次検証レポートと同じく1店1日あたり（PSAD）の値と見られます。2店合計は2店の値を足したものです。</dd>
+      </dl>
+    </div>
+
+    <div class="ac-card" id="howto">
+      <h2>毎週の更新</h2>
+      <p class="ac-note">各店の「お店づくりレポート②」をチャットに添付すると、その週の行を追加します。月の最終週のレポートからは月計も更新します。</p>
+      <dl class="ac-dl">
+        <dt>収録済みの週</dt><dd id="weeks-covered" data-source="week_sum">—</dd>
+        <dt>収録店舗</dt><dd id="stores-covered" data-source="weekly_total">—</dd>
+      </dl>
+    </div>
+  </section>
+</main>
+
+<script>
+/* ---------- calculations ---------- */
+dash.calc('store_week', {
+  inputs: ['weekly_total'],
+  title: '店舗別の率（週）',
+  description: 'ロス額（値引高＋廃棄高）、販売率（販売高÷（販売高＋廃棄高＋値引高）、レポートと同じ式）、値引率・ロス率・荒利率（販売高で割った値）。',
+  fn: (weekly_total) => weekly_total.map((r) => {
+    const s = Number(r.sales), d = Number(r.discount), w = Number(r.waste), g = Number(r.gross_profit);
+    return { key: r.key, store: r.store, week_start: r.week_start, loss: d + w, sell_rate: s / (s + d + w), discount_rate: d / s, waste_rate: w / s, loss_rate: (d + w) / s, gp_rate: g / s };
+  }),
+});
+dash.calc('week_sum', {
+  inputs: ['weekly_total'],
+  title: '2店合計（週）',
+  description: '週ごとに2店の値を足し、率と前週からの変化を求めた値。',
+  fn: (weekly_total) => {
+    const by = new Map();
+    weekly_total.forEach((r) => {
+      const k = r.week_start;
+      if (!by.has(k)) by.set(k, { week_start: k, week_end: r.week_end, stores: 0, sales: 0, discount: 0, gross_profit: 0, waste: 0 });
+      const o = by.get(k);
+      o.stores += 1; o.sales += Number(r.sales); o.discount += Number(r.discount); o.gross_profit += Number(r.gross_profit); o.waste += Number(r.waste);
+    });
+    const rows = [...by.values()].sort((a, b) => a.week_start.localeCompare(b.week_start));
+    rows.forEach((o, i) => {
+      o.gp_rate = o.gross_profit / o.sales;
+      o.loss = o.discount + o.waste;
+      o.loss_rate = o.loss / o.sales;
+      o.sell_rate = o.sales / (o.sales + o.loss);
+      const p = rows[i - 1];
+      o.sales_wow = p ? o.sales / p.sales : null;
+      o.gp_wow = p ? o.gross_profit / p.gross_profit : null;
+      o.gp_rate_diff = p ? o.gp_rate - p.gp_rate : null;
+      o.loss_rate_diff = p ? o.loss_rate - p.loss_rate : null;
+    });
+    return rows;
+  },
+});
+dash.calc('month_rates', {
+  inputs: ['monthly_total'],
+  title: '店舗別の率（月）',
+  description: 'ロス額（値引高＋廃棄高）、販売率（販売高÷（販売高＋廃棄高＋値引高）、レポートと同じ式）、値引率・ロス率・荒利率（販売高で割った値）。',
+  fn: (monthly_total) => monthly_total.map((r) => {
+    const s = Number(r.sales), d = Number(r.discount), w = Number(r.waste), g = Number(r.gross_profit);
+    return { key: r.key, store: r.store, month: r.month, loss: d + w, sell_rate: s / (s + d + w), discount_rate: d / s, waste_rate: w / s, loss_rate: (d + w) / s, gp_rate: g / s };
+  }),
+});
+
+dash.calc('cat_rates', {
+  inputs: ['weekly_category', 'monthly_category'],
+  title: 'カテゴリ別の販売率',
+  description: '販売高÷（販売高＋廃棄高＋値引高）。レポートの販売率と同じ式。',
+  fn: (weekly_category, monthly_category) => [...weekly_category, ...monthly_category].map((r) => {
+    const s = Number(r.sales), d = Number(r.discount), w = Number(r.waste);
+    return { key: r.key, sell_rate: s + d + w > 0 ? s / (s + d + w) : null };
+  }),
+});
+
+dash.calc('gp_model', {
+  inputs: ['weekly_total'],
+  title: '荒利率の回帰式',
+  description: '店週ごとに 荒利率 = a + b×値引率 + c×廃棄率 を最小二乗法で当てはめた結果。',
+  fn: (weekly_total) => {
+    const pts = weekly_total.map((r) => { const s = +r.sales; return [1, +r.discount / s, +r.waste / s, +r.gross_profit / s]; });
+    const A = [0, 1, 2].map((i) => [0, 1, 2].map((j) => d3.sum(pts, (p) => p[i] * p[j])));
+    const v = [0, 1, 2].map((i) => d3.sum(pts, (p) => p[i] * p[3]));
+    for (let i = 0; i < 3; i++) for (let k = i + 1; k < 3; k++) { const f = A[k][i] / A[i][i]; for (let j = i; j < 3; j++) A[k][j] -= f * A[i][j]; v[k] -= f * v[i]; }
+    const x = [0, 0, 0];
+    for (let i = 2; i >= 0; i--) x[i] = (v[i] - d3.sum([0, 1, 2].filter((j) => j > i), (j) => A[i][j] * x[j])) / A[i][i];
+    const pred = pts.map((p) => x[0] + x[1] * p[1] + x[2] * p[2]);
+    const mean = d3.mean(pts, (p) => p[3]);
+    const r2 = 1 - d3.sum(pts, (p, i) => (p[3] - pred[i]) ** 2) / d3.sum(pts, (p) => (p[3] - mean) ** 2);
+    return [{ base_gp_rate: x[0], coef_discount: x[1], coef_waste: x[2], gain_per_discount_yen: -x[1], gain_per_waste_yen: -x[2], r2, n: pts.length, mae_pt: d3.mean(pts, (p, i) => Math.abs(p[3] - pred[i])) * 100 }];
+  },
+});
+dash.calc('opportunity', {
+  inputs: ['monthly_total', 'gp_model'],
+  title: '店舗ごとの伸びしろ',
+  description: '最新月のロス率を一番低い店にそろえた場合の荒利益高の増加。増加 = 差×販売高×（値引・廃棄の係数の平均）。',
+  fn: (monthly_total, gp_model) => {
+    const m = gp_model[0], k = (m.gain_per_discount_yen + m.gain_per_waste_yen) / 2;
+    const last = d3.max(monthly_total, (r) => r.month);
+    const rows = monthly_total.filter((r) => r.month === last).map((r) => ({ key: r.key, store: r.store, month: r.month, sales: +r.sales, discount: +r.discount, waste: +r.waste, loss_day: +r.discount + +r.waste, loss_rate: (+r.discount + +r.waste) / +r.sales }));
+    const best = d3.min(rows, (r) => r.loss_rate);
+    return rows.map((r) => ({ ...r, gap_pt: (r.loss_rate - best) * 100, gain_day: (r.loss_rate - best) * r.sales * k, gain_30: (r.loss_rate - best) * r.sales * k * 30 }));
+  },
+});
+dash.calc('cat_opportunity', {
+  inputs: ['monthly_category', 'gp_model'],
+  title: 'カテゴリ別のロス削減効果',
+  description: '最新月のカテゴリごとに、値引と廃棄をそれぞれ2割減らした場合の荒利益高の増加（係数×額×0.2）。',
+  fn: (monthly_category, gp_model) => {
+    const m = gp_model[0], last = d3.max(monthly_category, (r) => r.month);
+    return monthly_category.filter((r) => r.month === last).map((r) => {
+      const s = +r.sales, d = +r.discount, w = +r.waste;
+      return { key: r.key, store: r.store, month: r.month, category: r.category, discount: d, waste: w, loss: d + w, sell_rate: s + d + w > 0 ? s / (s + d + w) : null, gain_20: 0.2 * (d * m.gain_per_discount_yen + w * m.gain_per_waste_yen) };
+    });
+  },
+});
+
+/* ---------- helpers ---------- */
+const fInt = d3.format(',');
+const fRate = d3.format('.1%');
+const fSell = (v) => (v == null ? '—' : d3.format('.0%')(v));
+// 0.05pt 未満は「±0.0pt」（四捨五入で 0.0 になるのに ▲ や色が付かないようにする）
+const isZeroPt = (v) => Math.abs(v * 100) < 0.05;
+const fPt = (v) => (isZeroPt(v) ? '±' : v > 0 ? '+' : '−') + Math.abs(v * 100).toFixed(1) + 'pt';
+const fYoy = (v) => (v == null || v === '' ? '—' : (Number.isInteger(Number(v)) ? Number(v) : Number(v).toFixed(1)) + '%');
+const fYoy1 = (v) => (v == null || v === '' ? '—' : Number(v).toFixed(1) + '%');
+const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const fPtX = (v) => fPt(v);
+const fRatio = (v) => (v == null ? '—' : (v * 100).toFixed(1) + '%');
+const wkShort = (s) => { const a = s.split('-'); return `${+a[1]}/${+a[2]}`; };
+const wkLabel = (s, e) => { const a = s.split('-'), b = (e || '').split('-'); return `${+a[1]}/${+a[2]}〜${b.length > 2 ? `${+b[1]}/${+b[2]}` : ''}`; };
+// 月のラベル。月の途中の値（period_end あり）は「10月（1〜18日）」のように途中までと分かるようにする
+const monthLabel = (m) => {
+  // 店が全部「月の途中」のときだけ途中と表示。店ごとの表は rowMonthLabel を使う
+  const d = dash.data('monthly_total'), rs = d.status === 'ok' ? d.data.filter((x) => x.month === m) : [];
+  const r = rs.length && rs.every((x) => x.period_end) ? rs[0] : null;
+  return r ? `${+m.split('-')[1]}月（1〜${+r.period_end.slice(8)}日）` : `${+m.split('-')[1]}月`;
+};
+const rowMonthLabel = (r) => (r.period_end ? `${+r.month.split('-')[1]}月（1〜${+r.period_end.slice(8)}日）` : `${+r.month.split('-')[1]}月`);
+const _unused = () => {
+};
+const fullName = (s) => { const d = dash.data('weekly_total'); const r = d.status === 'ok' ? d.data.find((x) => x.store === s) : null; return (r && r.store_name) || s; };
+const state = { page: 'overview', week: null, store: null, catPeriod: null, catSort: { k: 'sales', d: -1 }, metric: 'gp_yoy', month: null };
+const el = (id) => document.getElementById(id);
+const td = (text, cls) => { const c = document.createElement('td'); c.textContent = text; if (cls) c.className = cls; return c; };
+const yoyCls = (v) => (v != null && v !== '' && Number(v) < 100 ? 'ac-neg' : '');
+const ok = (...ids) => ids.every((i) => dash.data(i).status === 'ok');
+const failLine = (box) => { box.replaceChildren(); const d = document.createElement('div'); d.className = 'ac-fail'; d.textContent = 'データを読み込めませんでした'; box.append(d); };
+const anyErr = (...ids) => ids.some((i) => dash.data(i).status === 'error');
+const storeOrder = (rows) => [...new Set(rows.map((r) => r.store))];
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+window.acColors = () => dash.colors;
+
+/* ---------- tooltip ---------- */
+function makeTip(box) {
+  let t = box.querySelector('.ac-tip');
+  if (!t) { t = document.createElement('div'); t.className = 'ac-tip'; t.hidden = true; box.append(t); }
+  return {
+    show(x, y, head, lines) {
+      t.replaceChildren();
+      const h = document.createElement('div'); h.className = 'ac-tip-h'; h.textContent = head; t.append(h);
+      lines.forEach(([color, name, val]) => {
+        const r = document.createElement('div');
+        if (color) { const s = document.createElement('span'); s.className = 'ac-dot'; s.style.background = color; r.append(s); }
+        r.append(document.createTextNode(`${name}  ${val}`)); t.append(r);
+      });
+      t.hidden = false;
+      const bw = box.clientWidth, tw = t.offsetWidth, th = t.offsetHeight;
+      t.style.left = Math.max(0, Math.min(bw - tw, x + 12)) + 'px';
+      t.style.top = Math.max(0, y - th - 8) + 'px';
+    },
+    hide() { t.hidden = true; },
+  };
+}
+
+/* ---------- sparkline (KPI tiles) ---------- */
+function sparkline(box, rows, field, fmt) {
+  box.replaceChildren();
+  if (rows.length < 2) return;
+  const W = Math.max(120, box.clientWidth), H = 36, p = 4;
+  const x = d3.scalePoint(rows.map((r) => r.week_start), [p, W - p]);
+  const ext = d3.extent(rows, (r) => r[field]);
+  const y = d3.scaleLinear(ext[0] === ext[1] ? [ext[0] - 1, ext[1] + 1] : ext, [H - p, p]);
+  const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('aria-hidden', 'true');
+  svg.append('path').attr('d', d3.line().x((r) => x(r.week_start)).y((r) => y(r[field]))(rows)).style('fill', 'none').style('stroke', 'var(--cds-chart-muted)').attr('stroke-width', 1.5).attr('stroke-linejoin', 'round').attr('stroke-linecap', 'round');
+  rows.forEach((r) => {
+    const on = r.week_start === state.week;
+    svg.append('circle').attr('cx', x(r.week_start)).attr('cy', y(r[field])).attr('r', on ? 3.5 : 2).style('fill', on ? 'var(--color-fg)' : 'var(--cds-chart-muted)');
+  });
+}
+
+/* ---------- line chart (weeks or months on x) ---------- */
+function maxTextW(svg, labels) {
+  const t = svg.append('text').attr('font-size', 12).style('font-family', 'var(--font-anthropic-sans)');
+  let w = 0; labels.forEach((l) => { t.text(l); w = Math.max(w, t.node().getComputedTextLength()); });
+  t.remove(); return w;
+}
+function fitsAll(svg, labels, step) { return maxTextW(svg, labels) + 10 <= step; }
+// タップでもツールチップを出す（マウスは離れたら消す、タッチは次にタップするまで残す）
+function hoverOn(sel, show, hide) {
+  sel.on('pointermove', (ev) => show(ev)).on('pointerdown', (ev) => show(ev))
+    .on('pointerleave', (ev) => { if (ev.pointerType === 'mouse') hide(); });
+}
+function lineChart(box, cfg) {
+  // cfg: {xs:[keys], xLabel:fn, series:[{name,color,dash,values:Map}], ref:100, fmt}
+  box.replaceChildren();
+  const W = Math.max(280, box.clientWidth), H = 300;
+  const all = cfg.series.flatMap((s) => [...s.values.values()].filter((v) => v != null));
+  const lo = Math.min(cfg.ref ?? Infinity, d3.min(all)), hi = Math.max(cfg.ref ?? -Infinity, d3.max(all));
+  const span0 = hi - lo;
+  const pad = span0 * 0.08 || Math.abs(hi) * 0.05 || 1;
+  const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('role', 'img');
+  const probe = svg.append('text').attr('font-size', 12).style('font-family', 'var(--font-anthropic-sans)');
+  const endTxt = (s) => `${s.name} ${cfg.fmt(s.values.get(cfg.xs[cfg.xs.length - 1]))}`;
+  let endW = 0; cfg.series.forEach((s) => { probe.text(endTxt(s)); endW = Math.max(endW, probe.node().getComputedTextLength()); });
+  const y0 = d3.scaleLinear([lo - pad, hi + pad], [H - 28, 12]).nice();
+  let tickW = 0; y0.ticks(5).forEach((t) => { probe.text(cfg.fmt(t)); tickW = Math.max(tickW, probe.node().getComputedTextLength()); });
+  probe.remove();
+  const m = { l: tickW + 10, r: endW + 14, t: 12, b: 28 };
+  const x = d3.scalePoint(cfg.xs, [m.l + 8, W - m.r]);
+  const y = y0.range([H - m.b, m.t]);
+  const g = svg.append('g');
+  g.selectAll('line.grid').data(y.ticks(5)).join('line').attr('x1', m.l).attr('x2', W - m.r + 6).attr('y1', y).attr('y2', y).style('stroke', 'var(--cds-chart-grid)');
+  g.selectAll('text.yt').data(y.ticks(5)).join('text').attr('x', m.l - 6).attr('y', (d) => y(d) + 4).attr('text-anchor', 'end').attr('font-size', 12).style('fill', 'var(--color-fg-muted)').text(cfg.fmt);
+  // x軸ラベル：入りきらないときは短い表記（開始日だけ）にし、それでも重なるときは間引く（最新は必ず出す）
+  const axisLabel = cfg.xShort && fitsAll(svg, cfg.xs.map(cfg.xLabel), x.step()) === false ? cfg.xShort : cfg.xLabel;
+  const every = Math.max(1, Math.ceil((maxTextW(svg, cfg.xs.map(axisLabel)) + 10) / Math.max(1, x.step())));
+  const shown = cfg.xs.filter((d, i) => (cfg.xs.length - 1 - i) % every === 0);
+  g.selectAll('text.xt').data(shown).join('text').attr('x', (d) => x(d)).attr('y', H - 8).attr('text-anchor', (d) => (cfg.xs.length > 1 && d === cfg.xs[0] && x.step() < 60 ? 'start' : 'middle')).attr('font-size', 12).style('fill', 'var(--color-fg-muted)').text(axisLabel);
+  if (cfg.ref != null) g.append('line').attr('x1', m.l).attr('x2', W - m.r + 6).attr('y1', y(cfg.ref)).attr('y2', y(cfg.ref)).style('stroke', 'var(--cds-chart-reference)').attr('stroke-dasharray', '4 4');
+  const ln = d3.line().defined((d) => d[1] != null).x((d) => x(d[0])).y((d) => y(d[1]));
+  cfg.series.forEach((s) => {
+    const pts = cfg.xs.map((k) => [k, s.values.get(k) ?? null]);
+    g.append('path').attr('d', ln(pts)).style('fill', 'none').style('stroke', s.color).attr('stroke-width', s.emph ? 2.5 : 2).attr('stroke-linecap', 'round').attr('stroke-linejoin', 'round').attr('stroke-dasharray', s.dash ? '6 4' : null);
+    g.selectAll(null).data(pts.filter((p) => p[1] != null)).join('circle').attr('cx', (d) => x(d[0])).attr('cy', (d) => y(d[1])).attr('r', 3).style('fill', s.color);
+  });
+  // end labels, nudged apart
+  const ends = cfg.series.filter((s) => s.values.get(cfg.xs[cfg.xs.length - 1]) != null).map((s) => ({ s, y: y(s.values.get(cfg.xs[cfg.xs.length - 1])) })).sort((a, b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 14) ends[i].y = ends[i - 1].y + 14;
+  const over = ends.length ? ends[ends.length - 1].y - (H - m.b) : 0;
+  if (over > 0) ends.forEach((e) => { e.y -= over; });
+  ends.forEach((e) => g.append('text').attr('x', W - m.r + 10).attr('y', e.y + 4).attr('font-size', 12).style('fill', e.s.color).text(endTxt(e.s)));
+  // hover
+  const tip = makeTip(box);
+  const rule = g.append('line').attr('y1', m.t).attr('y2', H - m.b).style('stroke', 'var(--cds-chart-axis)').attr('opacity', 0);
+  svg.append('rect').attr('x', m.l).attr('y', m.t).attr('width', Math.max(0, W - m.r - m.l)).attr('height', H - m.t - m.b).attr('fill', 'transparent')
+    .call(hoverOn, (ev) => {
+      const [px] = d3.pointer(ev);
+      const k = cfg.xs.reduce((a, b) => (Math.abs(x(b) - px) < Math.abs(x(a) - px) ? b : a));
+      rule.attr('x1', x(k)).attr('x2', x(k)).attr('opacity', 1);
+      const scale = box.clientWidth / W;
+      tip.show(x(k) * scale, m.t * scale + 40, cfg.xLabel(k), cfg.series.map((s) => [s.color, s.name, cfg.fmt(s.values.get(k))]));
+    }, () => { rule.attr('opacity', 0); tip.hide(); });
+}
+
+/* ---------- scatter ---------- */
+function scatter(box, pts) {
+  box.replaceChildren();
+  const W = Math.max(280, box.clientWidth), H = 300, m = { l: 52, r: 24, t: 14, b: 48 };
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const x = d3.scaleLinear([d3.min(xs) - 0.01, d3.max(xs) + 0.01], [m.l, W - m.r]).nice();
+  const y = d3.scaleLinear([d3.min(ys) - 0.01, d3.max(ys) + 0.01], [H - m.b, m.t]).nice();
+  const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('role', 'img');
+  svg.selectAll('line.gy').data(y.ticks(5)).join('line').attr('x1', m.l).attr('x2', W - m.r).attr('y1', y).attr('y2', y).style('stroke', 'var(--cds-chart-grid)');
+  svg.selectAll('text.ty').data(y.ticks(5)).join('text').attr('x', m.l - 6).attr('y', (d) => y(d) + 4).attr('text-anchor', 'end').attr('font-size', 12).style('fill', 'var(--color-fg-muted)').text(d3.format('.0%'));
+  svg.selectAll('text.tx').data(x.ticks(5)).join('text').attr('x', x).attr('y', H - m.b + 20).attr('text-anchor', 'middle').attr('font-size', 12).style('fill', 'var(--color-fg-muted)').text(d3.format('.0%'));
+  svg.append('text').attr('x', (m.l + W - m.r) / 2).attr('y', H - 6).attr('text-anchor', 'middle').attr('font-size', 12).style('fill', 'var(--color-fg-muted)').text('ロス率（値引＋廃棄）÷販売高');
+  svg.append('text').attr('transform', `translate(12,${(m.t + H - m.b) / 2}) rotate(-90)`).attr('text-anchor', 'middle').attr('font-size', 12).style('fill', 'var(--color-fg-muted)').text('荒利率');
+  const tip = makeTip(box), labels = [];
+  pts.forEach((p) => {
+    svg.append('circle').attr('cx', x(p.x)).attr('cy', y(p.y)).attr('r', 7).style('fill', p.color)
+      .call(hoverOn, () => { const s = box.clientWidth / W; tip.show(x(p.x) * s, y(p.y) * s, p.name, [[null, 'ロス率', fRate(p.x)], [null, '荒利率', fRate(p.y)]]); }, () => tip.hide());
+    const right = x(p.x) < W - m.r - 70;
+    labels.push(svg.append('text').attr('x', x(p.x) + (right ? 11 : -11)).attr('y', y(p.y) + 4).attr('text-anchor', right ? 'start' : 'end').attr('font-size', 12).style('fill', 'var(--color-fg)').text(p.name));
+  });
+  // 名前が重なったら、上下にずらす
+  for (let pass = 0; pass < 4; pass++) {
+    labels.forEach((a, i) => labels.slice(i + 1).forEach((c) => {
+      const ra = a.node().getBBox(), rc = c.node().getBBox();
+      if (ra.x < rc.x + rc.width && rc.x < ra.x + ra.width && ra.y < rc.y + rc.height && rc.y < ra.y + ra.height) {
+        const up = ra.y <= rc.y ? a : c, dn = up === a ? c : a;
+        up.attr('y', +up.attr('y') - 7); dn.attr('y', +dn.attr('y') + 7);
+      }
+    }));
+  }
+}
+
+/* ---------- pages ---------- */
+// 「表示する週」と「この週のポイント」が効くタブ。ほかのタブでは隠して、選んでも変わらないものを見せない。
+const WEEK_PAGES = ['overview', 'store', 'driver'];
+function setPage(p) {
+  state.page = p;
+  document.querySelectorAll('.ac-tab').forEach((b) => { const on = b.dataset.page === p; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; });
+  document.querySelectorAll('.ac-page').forEach((s) => { s.hidden = s.id !== p; });
+  el('week-ctl').hidden = !WEEK_PAGES.includes(p);
+  el('take-box').hidden = p !== 'overview';
+  dash.setLink(p);
+  draw();
+}
+const tabs = [...document.querySelectorAll('.ac-tab')];
+tabs.forEach((b, i) => {
+  b.addEventListener('click', () => { setPage(b.dataset.page); b.scrollIntoView({ block: 'nearest', inline: 'nearest' }); });
+  b.addEventListener('keydown', (e) => {
+    const j = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : null;
+    if (j == null) return;
+    e.preventDefault();
+    const n = tabs[(j + tabs.length) % tabs.length]; setPage(n.dataset.page); n.focus();
+  });
+});
+window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (h !== state.page && tabs.some((b) => b.dataset.page === h)) setPage(h); });
+el('week-pick').addEventListener('change', (e) => { state.week = e.target.value; state.catPeriod = null; draw(); });
+
+function weeksSorted() {
+  return dash.data('week_sum').status === 'ok' ? dash.data('week_sum').data : [];
+}
+
+function drawHeader() {
+  const ws = weeksSorted();
+  const pick = el('week-pick');
+  if (!ws.length) return;
+  if (!state.week || !ws.some((w) => w.week_start === state.week)) state.week = ws[ws.length - 1].week_start;
+  pick.replaceChildren(...ws.slice().reverse().map((w) => new Option(`${wkLabel(w.week_start, w.week_end)}${w === ws[ws.length - 1] ? '（最新）' : ''}`, w.week_start)));
+  pick.value = state.week;
+  if (ok('weekly_total')) el('stores-covered').textContent = storeOrder(dash.data('weekly_total').data).map(fullName).join('・');
+  el('coverage').textContent = `収録：${wkLabel(ws[0].week_start, ws[0].week_end)} 〜 ${wkLabel(ws[ws.length - 1].week_start, ws[ws.length - 1].week_end)} の${ws.length}週（金額は1店1日あたり）。前年比が100%未満の数字は赤です。`;
+  el('weeks-covered').textContent = `${wkLabel(ws[0].week_start, ws[0].week_end)} から ${wkLabel(ws[ws.length - 1].week_start, ws[ws.length - 1].week_end)} までの${ws.length}週`;
+
+  // takeaway
+  const tk = el('takeaway');
+  const sw = dash.data('store_week');
+  if (!ok('weekly_total', 'store_week', 'week_sum')) return;
+  const w = ws.find((r) => r.week_start === state.week);
+  const rows = sw.data.filter((r) => r.week_start === state.week);
+  const byGp = rows.slice().sort((a, b) => b.gp_rate - a.gp_rate);
+  const byLoss = rows.slice().sort((a, b) => a.loss_rate - b.loss_rate);
+  const same = byGp.every((r, i) => r.store === byLoss[i].store);
+  const mk = (src, field, where, text) => { const s = document.createElement('b'); s.dataset.source = src; s.dataset.field = field; s.dataset.where = where; s.textContent = text; return s; };
+  const ww = `week_start=${state.week}`;
+  const top = byGp[0], bot = byGp[byGp.length - 1];
+  tk.replaceChildren(
+    `${wkLabel(w.week_start, w.week_end)}の2店合計は、荒利益高 `, mk('week_sum', 'gross_profit', ww, fInt(w.gross_profit)),
+    `・荒利率 `, mk('week_sum', 'gp_rate', ww, fRate(w.gp_rate)), `。荒利率は${top.store}が最も高く（`,
+    mk('store_week', 'gp_rate', `key=${encodeURIComponent(top.key)}`, fRate(top.gp_rate)), `）、${bot.store}が最も低い（`,
+    mk('store_week', 'gp_rate', `key=${encodeURIComponent(bot.key)}`, fRate(bot.gp_rate)), `）。`,
+    same ? 'ロス率の低い順と荒利率の高い順が一致しています。' : 'ロス率の低い順と荒利率の高い順は一部入れ替わっています。'
+  );
+}
+
+function drawOverview() {
+  const ws = weeksSorted();
+  const w = ws.find((r) => r.week_start === state.week);
+  const where = `week_start=${state.week}`;
+  document.querySelectorAll('#overview [data-source="week_sum"]').forEach((n) => { n.dataset.where = where; });
+  if (w) {
+    const set = (sel, text, cls) => { const n = document.querySelector(sel); n.textContent = text; n.classList.remove('dash-skeleton', 'ac-neg', 'ac-pos'); if (cls) n.classList.add(cls); };
+    const arrow = (v, base) => (v == null ? '' : v > base ? '▲ ' : v < base ? '▼ ' : '');
+    set('#kpi-sales .ac-kpi-v', fInt(w.sales));
+    set('#kpi-sales .ac-delta', w.sales_wow == null ? '—' : arrow(w.sales_wow, 1) + fRatio(w.sales_wow), w.sales_wow == null ? '' : w.sales_wow < 1 ? 'ac-neg' : 'ac-pos');
+    set('#kpi-gp .ac-kpi-v', fInt(w.gross_profit));
+    set('#kpi-gp .ac-delta', w.gp_wow == null ? '—' : arrow(w.gp_wow, 1) + fRatio(w.gp_wow), w.gp_wow == null ? '' : w.gp_wow < 1 ? 'ac-neg' : 'ac-pos');
+    set('#kpi-gprate .ac-kpi-v', fRate(w.gp_rate));
+    set('#kpi-gprate .ac-delta', w.gp_rate_diff == null ? '—' : (isZeroPt(w.gp_rate_diff) ? '' : arrow(w.gp_rate_diff, 0)) + fPt(w.gp_rate_diff), w.gp_rate_diff == null || isZeroPt(w.gp_rate_diff) ? '' : w.gp_rate_diff < 0 ? 'ac-neg' : 'ac-pos');
+    set('#kpi-loss .ac-kpi-v', fInt(w.loss));
+    set('#kpi-loss .lr', fRate(w.loss_rate));
+    set('#kpi-loss .lrd', w.loss_rate_diff == null ? '—' : (isZeroPt(w.loss_rate_diff) ? '' : arrow(w.loss_rate_diff, 0)) + fPt(w.loss_rate_diff), w.loss_rate_diff == null || isZeroPt(w.loss_rate_diff) ? '' : w.loss_rate_diff > 0 ? 'ac-neg' : 'ac-pos');
+    [['kpi-sales', 'sales', fInt], ['kpi-gp', 'gross_profit', fInt], ['kpi-gprate', 'gp_rate', fRate], ['kpi-loss', 'loss', fInt]].forEach(([id, f, fmt]) => sparkline(document.querySelector(`#${id} .ac-spark`), ws, f, fmt));
+  }
+  // scorecard
+  const tb = document.querySelector('#score-table tbody');
+  if (ok('weekly_total', 'store_week')) {
+    const wt = dash.data('weekly_total').data, rates = new Map(dash.data('store_week').data.map((r) => [r.key, r]));
+    const colors = dash.colors, order = storeOrder(wt);
+    const rows = wt.filter((r) => r.week_start === state.week).sort((a, b) => rates.get(b.key).gp_rate - rates.get(a.key).gp_rate);
+    const gpMax = d3.max(rows, (r) => rates.get(r.key).gp_rate) || 1;
+    tb.replaceChildren(...rows.map((r, ri) => {
+      const q = rates.get(r.key), tr = document.createElement('tr'); tr.dataset.key = r.key;
+      const c0 = document.createElement('td'); const rk = document.createElement('span'); rk.className = 'ac-rank'; rk.textContent = String(ri + 1); rk.setAttribute('aria-label', `${ri + 1}位`); const dot = document.createElement('span'); dot.className = 'ac-dot'; dot.style.background = colors[order.indexOf(r.store) % colors.length]; c0.append(rk, dot, document.createTextNode(r.store)); c0.title = fullName(r.store);
+      tr.append(c0, td(fInt(r.sales)), td(fYoy(r.sales_yoy), yoyCls(r.sales_yoy)), td(fInt(r.discount)), td(fRate(q.discount_rate)), td(fInt(r.waste)), td(fRate(q.waste_rate)), td(fInt(q.loss)), td(fRate(q.loss_rate)), td(fSell(q.sell_rate)),
+        td(fInt(r.gross_profit)), td(fYoy(r.gp_yoy), yoyCls(r.gp_yoy)), (() => { const c = td(fRate(q.gp_rate)); c.style.fontWeight = '600'; const bar = document.createElement('span'); bar.className = 'ac-inbar ac-hide-sm'; bar.style.width = `${Math.max(4, (q.gp_rate / gpMax) * 48)}px`; c.append(bar); return c; })(), td(fYoy(r.discount_sku_match), 'ac-hide-sm'));
+      return tr;
+    }));
+  } else tb.replaceChildren();
+  // GP yoy trend
+  const box = el('gp-trend');
+  if (anyErr('weekly_total')) failLine(box);
+  else if (ok('weekly_total')) {
+    const wt = dash.data('weekly_total').data, order = storeOrder(wt), xs = [...new Set(wt.map((r) => r.week_start))].sort();
+    const endOf = new Map(wt.map((r) => [r.week_start, r.week_end]));
+    lineChart(box, {
+      xs, xLabel: (k) => wkLabel(k, endOf.get(k)), xShort: wkShort, ref: 100, fmt: (v) => (v == null ? '—' : `${Math.round(v)}%`),
+      series: order.map((s, i) => ({ name: s, color: dash.colors[i % dash.colors.length], values: new Map(wt.filter((r) => r.store === s).map((r) => [r.week_start, Number(r.gp_yoy)])) })),
+    });
+  }
+  // scatter
+  const sb = el('loss-scatter');
+  if (anyErr('weekly_total')) failLine(sb);
+  else if (ok('weekly_total', 'store_week')) {
+    const order = storeOrder(dash.data('weekly_total').data);
+    scatter(sb, dash.data('store_week').data.filter((r) => r.week_start === state.week).map((r) => ({ name: r.store, x: r.loss_rate, y: r.gp_rate, color: dash.colors[order.indexOf(r.store) % dash.colors.length] })));
+  }
+}
+
+/* ---------- 店舗レポート（先週との比較） ---------- */
+function drawStoreReport(mine, endOf) {
+  const i = mine.findIndex((r) => r.week_start === state.week);
+  const cur = mine[i >= 0 ? i : mine.length - 1], pre = mine[(i >= 0 ? i : mine.length - 1) - 1];
+  const sg = (v) => (Math.round(v) > 0 ? '▲+' : Math.round(v) < 0 ? '▼−' : '±') + fInt(Math.abs(Math.round(v)));
+  const MET = [['販売高', (r) => +r.sales, 1, 'y'], ['荒利益高', (r) => +r.gross_profit, 1, 'y'], ['荒利率', (r) => r.gross_profit / r.sales, 1, 'p'],
+    ['ロス（値引＋廃棄）', (r) => +r.discount + +r.waste, -1, 'y'], ['値引高', (r) => +r.discount, -1, 'y'], ['廃棄高', (r) => +r.waste, -1, 'y'], ['廃棄率', (r) => r.waste / r.sales, -1, 'p']];
+  const fill = (table, a, b, la, lb) => {
+    const hr = document.createElement('tr');
+    ['', la, lb, '差'].forEach((h) => { const th = document.createElement('th'); th.textContent = h; hr.append(th); });
+    table.querySelector('thead').replaceChildren(hr);
+    table.querySelector('tbody').replaceChildren(...MET.map(([l, f, good, k]) => {
+      const tr = document.createElement('tr'); if (l === '荒利益高') tr.className = 'em';
+      const va = f(a), vb = f(b), d = vb - va, zero = k === 'p' ? isZeroPt(d) : Math.round(d) === 0;
+      tr.append(td(l), td(k === 'p' ? fRate(va) : fInt(va)), td(k === 'p' ? fRate(vb) : fInt(vb)),
+        td(k === 'p' ? (zero ? '' : d > 0 ? '▲' : '▼') + fPt(d) : sg(d), 'd ' + (zero ? '' : (d > 0) === (good > 0) ? 'ac-pos' : 'ac-neg')));
+      return tr;
+    }));
+  };
+  const wl = (r) => wkLabel(r.week_start, endOf.get(r.week_start));
+  el('sr-eyebrow').textContent = `店舗レポート　${state.store}（${fullName(state.store)}）　${wl(cur)}`;
+  if (!pre) {
+    el('sr-head').textContent = `${wl(cur)}の荒利益高は ${fInt(cur.gross_profit)}円／日です。`;
+    el('sr-sub').textContent = 'この週より前のデータがないため、先週との比較はありません。';
+    el('sr-week-card').hidden = true; el('sr-cat-card').hidden = true;
+  } else {
+    el('sr-week-card').hidden = false; el('sr-cat-card').hidden = false;
+    const d = cur.gross_profit - pre.gross_profit;
+    const b = document.createElement('b'); b.textContent = `${d >= 0 ? '▲' : '▼'}${fInt(Math.abs(d))}円／日`; b.className = d >= 0 ? 'ac-pos' : 'ac-neg';
+    el('sr-head').replaceChildren('先週から荒利益高は ', b, d >= 0 ? ' 上がりました。' : ' 下がりました。');
+    const r0 = pre.gross_profit / pre.sales, r1 = cur.gross_profit / cur.sales;
+    el('sr-sub').textContent = `荒利益高 ${fInt(pre.gross_profit)} → ${fInt(cur.gross_profit)}（6日間の合計では ${sg(d * 6)}円）。荒利率 ${fRate(r0)} → ${fRate(r1)}、廃棄率 ${fRate(pre.waste / pre.sales)} → ${fRate(cur.waste / cur.sales)}。`;
+    el('sr-week-title').textContent = `先週との比較：${wl(pre)} → ${wl(cur)}（1日あたり）`;
+    fill(el('sr-week'), pre, cur, `${wkShort(pre.week_start)}週`, `${wkShort(cur.week_start)}週`);
+    // カテゴリの上がった・下がった
+    const wc = ok('weekly_category') ? dash.data('weekly_category').data.filter((r) => r.store === state.store) : [];
+    const A = new Map(wc.filter((r) => r.week_start === pre.week_start).map((r) => [r.category, r])), B = new Map(wc.filter((r) => r.week_start === cur.week_start).map((r) => [r.category, r]));
+    const chg = [...B.keys()].filter((c) => A.has(c)).map((c) => ({ c, a: A.get(c), b: B.get(c), d: B.get(c).gross_profit - A.get(c).gross_profit })).sort((x, y) => y.d - x.d);
+    const li = (x) => { const n = document.createElement('li'); const g = document.createElement('b'); g.textContent = `${x.c}　${sg(x.d)}／日`; const w = document.createElement('span'); w.className = 'why'; w.textContent = `売上 ${sg(x.b.sales - x.a.sales)}・値引 ${sg(x.b.discount - x.a.discount)}・廃棄 ${sg(x.b.waste - x.a.waste)}`; n.append(g, w); return n; };
+    const ups = chg.filter((x) => x.d > 0).slice(0, 4), downs = chg.filter((x) => x.d < 0).reverse().slice(0, 4);
+    const none = () => { const n = document.createElement('li'); n.textContent = 'なし'; return n; };
+    el('sr-up').replaceChildren(...(ups.length ? ups.map(li) : [none()]));
+    el('sr-down').replaceChildren(...(downs.length ? downs.map(li) : [none()]));
+  }
+  // 当月の累計（直近2回分のレポート）
+  const mt = ok('mtd_total') ? dash.data('mtd_total').data.filter((r) => r.store === state.store).sort((a, b) => a.period_end.localeCompare(b.period_end)) : [];
+  const card = el('sr-mtd-card');
+  if (mt.length < 2) { card.hidden = true; return; }
+  card.hidden = false;
+  const [ma, mb] = mt.slice(-2), ml = (r) => `${+r.period_end.slice(5, 7)}/1〜${+r.period_end.slice(5, 7)}/${+r.period_end.slice(8)}`;
+  el('sr-mtd-title').textContent = `当月の累計：${ml(ma)} → ${ml(mb)}（1日あたり）`;
+  const add = mb.gross_profit * mb.days - ma.gross_profit * ma.days, n = mb.days - ma.days;
+  el('sr-mtd-note').textContent = `各週のレポートの「当月」欄です。この${n}日間に積み上がった荒利益は合計 ${fInt(Math.round(add))}円（1日 ${fInt(Math.round(add / n))}円）。`;
+  fill(el('sr-mtd'), ma, mb, `〜${+ma.period_end.slice(5, 7)}/${+ma.period_end.slice(8)}`, `〜${+mb.period_end.slice(5, 7)}/${+mb.period_end.slice(8)}`);
+}
+
+function drawStore() {
+  if (!ok('weekly_total', 'store_week')) return;
+  const wt = dash.data('weekly_total').data, order = storeOrder(wt);
+  if (!state.store || !order.includes(state.store)) state.store = order[0];
+  const chips = el('store-chips');
+  chips.replaceChildren(...order.map((s) => {
+    const b = document.createElement('button'); b.className = 'ac-chip'; b.type = 'button'; b.textContent = s; b.title = fullName(s); b.setAttribute('aria-pressed', String(s === state.store));
+    b.addEventListener('click', () => { state.store = s; draw(); }); return b;
+  }));
+  el('store-weeks-title').textContent = `${state.store}　週別の推移`;
+  const rates = new Map(dash.data('store_week').data.map((r) => [r.key, r]));
+  const mine = wt.filter((r) => r.store === state.store).sort((a, b) => a.week_start.localeCompare(b.week_start));
+  document.querySelector('#store-week-table tbody').replaceChildren(...mine.map((r) => {
+    const q = rates.get(r.key), tr = document.createElement('tr'); tr.dataset.key = r.key;
+    if (r.week_start === state.week) tr.style.fontWeight = '600';
+    tr.append(td(wkLabel(r.week_start, r.week_end)), td(fInt(r.sales)), td(fYoy(r.sales_yoy), yoyCls(r.sales_yoy)), td(fYoy(r.sales_wow)), td(fInt(r.discount)), td(fRate(q.discount_rate)),
+      td(fInt(r.waste)), td(fRate(q.waste_rate)), td(fYoy(r.waste_yoy)), td(fInt(q.loss)), td(fRate(q.loss_rate)), td(fSell(q.sell_rate)), td(fInt(r.gross_profit)), td(fYoy(r.gp_yoy), yoyCls(r.gp_yoy)), td(fRate(q.gp_rate)));
+    return tr;
+  }));
+  // yoy chart
+  const endOf = new Map(wt.map((r) => [r.week_start, r.week_end]));
+  lineChart(el('store-yoy'), {
+    xs: mine.map((r) => r.week_start), xLabel: (k) => wkLabel(k, endOf.get(k)), xShort: wkShort, ref: 100, fmt: (v) => (v == null ? '—' : `${Math.round(v)}%`),
+    series: [
+      { name: '販売前年比', color: 'var(--cds-chart-muted)', values: new Map(mine.map((r) => [r.week_start, Number(r.sales_yoy)])) },
+      { name: '荒利前年比', color: dash.colors[order.indexOf(state.store) % dash.colors.length], emph: true, values: new Map(mine.map((r) => [r.week_start, Number(r.gp_yoy)])) },
+    ],
+  });
+  drawStoreReport(mine, endOf);
+  drawCategory(mine, endOf);
+  drawHeat(mine, endOf);
+}
+
+function drawCategory(mine, endOf) {
+  const table = el('cat-table');
+  const monthOk = dash.data('monthly_category').status === 'ok';
+  const periods = mine.map((r) => ({ id: r.week_start, label: wkLabel(r.week_start, endOf.get(r.week_start)) }));
+  const months = monthOk ? [...new Set(dash.data('monthly_category').data.filter((r) => r.store === state.store).map((r) => r.month))].sort() : [];
+  months.forEach((m) => periods.push({ id: 'M' + m, label: `月計 ${monthLabel(m)}` }));
+  if (!state.catPeriod || !periods.some((p) => p.id === state.catPeriod)) state.catPeriod = state.week && periods.some((p) => p.id === state.week) ? state.week : periods[periods.length - 1]?.id;
+  el('cat-period').replaceChildren(...periods.map((p) => {
+    const b = document.createElement('button'); b.className = 'ac-chip'; b.type = 'button'; b.textContent = p.label; b.setAttribute('aria-pressed', String(p.id === state.catPeriod));
+    b.addEventListener('click', () => { state.catPeriod = p.id; draw(); }); return b;
+  }));
+  const isMonth = state.catPeriod?.startsWith('M');
+  const src = isMonth ? 'monthly_category' : 'weekly_category';
+  if (dash.data(src).status !== 'ok') return;
+  table.dataset.source = src;
+  const sellOk = dash.data('cat_rates').status === 'ok';
+  const sell = new Map(sellOk ? dash.data('cat_rates').data.map((r) => [r.key, r.sell_rate]) : []);
+  const cols = [['category', 'カテゴリ', 's'], ['sales', '販売高', 'n'], ['sales_yoy', '販売前年比', 'y'], ['discount', '値引高', 'n'], ['waste', '廃棄高', 'n'], ['waste_rate', '廃棄率', 'w'], ['sell_rate', '販売率', 'r'], ['gross_profit', '荒利益高', 'n'], ['gp_yoy', '荒利前年比', 'y']];
+  if (!isMonth) cols.push(['sku_rate', '採用SKU率', 'p'], ['discount_sku_match', '値引SKU一致', 'p']);
+  const hr = table.querySelector('thead tr');
+  hr.replaceChildren(...cols.map(([k, label]) => {
+    const th = document.createElement('th'); th.dataset.field = k; if (k === 'sell_rate') th.dataset.source = 'cat_rates';
+    const b = document.createElement('button'); b.className = 'ac-th-btn'; b.type = 'button'; b.textContent = label + (state.catSort.k === k ? (state.catSort.d < 0 ? ' ↓' : ' ↑') : '');
+    th.setAttribute('aria-sort', state.catSort.k === k ? (state.catSort.d < 0 ? 'descending' : 'ascending') : 'none');
+    b.addEventListener('click', () => { state.catSort = { k, d: state.catSort.k === k ? -state.catSort.d : -1 }; draw(); });
+    th.append(b); return th;
+  }));
+  if (!cols.some((c) => c[0] === state.catSort.k)) state.catSort = { k: 'sales', d: -1 };
+  const rows = dash.data(src).data.filter((r) => r.store === state.store && (isMonth ? r.month === state.catPeriod.slice(1) : r.week_start === state.catPeriod));
+  const k = state.catSort.k;
+  const valOf = (r, c) => (c === 'sell_rate' ? sell.get(r.key) : c === 'waste_rate' ? (+r.sales > 0 ? +r.waste / +r.sales : null) : r[c]);
+  rows.sort((a, b) => (k === 'category' ? a.category.localeCompare(b.category, 'ja') : (Number(valOf(a, k) ?? -1e9) - Number(valOf(b, k) ?? -1e9))) * state.catSort.d);
+  table.querySelector('tbody').replaceChildren(...rows.map((r) => {
+    const tr = document.createElement('tr'); tr.dataset.key = r.key;
+    cols.forEach(([c, , t]) => {
+      const v = valOf(r, c);
+      if (t === 's') tr.append(td(v));
+      else if (t === 'r') tr.append(td(fSell(v)));
+      else if (t === 'w') tr.append(td(v == null ? '—' : fRate(v)));
+      else if (t === 'n') tr.append(td(fInt(v), Number(v) < 0 ? 'ac-neg' : ''));
+      else if (t === 'y') tr.append(td(fYoy(v), yoyCls(v)));
+      else tr.append(td(fYoy(v), c === 'sku_rate' && v != null && (v >= 110 || v < 90) ? 'ac-neg' : ''));
+    });
+    return tr;
+  }));
+}
+
+function drawHeat(mine, endOf) {
+  if (dash.data('weekly_category').status !== 'ok') return;
+  const rows = dash.data('weekly_category').data.filter((r) => r.store === state.store);
+  const weeks = mine.map((r) => r.week_start);
+  const cats = [...new Set(rows.map((r) => r.category))];
+  const val = new Map(rows.map((r) => [r.category + '|' + r.week_start, r]));
+  const t = el('heat-table');
+  t.querySelector('thead tr').replaceChildren(...['カテゴリ', ...weeks.map((w) => wkLabel(w, endOf.get(w)))].map((h) => { const th = document.createElement('th'); th.textContent = h; return th; }));
+  t.querySelector('tbody').replaceChildren(...cats.map((c) => {
+    const tr = document.createElement('tr'); tr.append(td(c));
+    weeks.forEach((w) => {
+      const r = val.get(c + '|' + w), v = r ? Number(r.gp_yoy) : null;
+      const cell = td(fYoy(v), 'h ' + yoyCls(v));
+      if (r) { cell.dataset.source = 'weekly_category'; cell.dataset.field = 'gp_yoy'; cell.dataset.where = `key=${encodeURIComponent(r.key)}`; }
+      if (v != null) {
+        const tone = v >= 100 ? 'var(--color-ok)' : 'var(--color-bad)';
+        const a = v >= 100 ? Math.min(30, 8 + (v - 100) / 6) : Math.min(34, 8 + (100 - v) / 3);
+        cell.style.background = `color-mix(in srgb, ${tone} ${a.toFixed(0)}%, transparent)`;
+      }
+      tr.append(cell);
+    });
+    return tr;
+  }));
+}
+
+/* ---------- 月の途中経過（当月欄を週ごとに比べる） ---------- */
+const mtdState = { mode: 'day', store: null };
+function drawMtd() {
+  const card = el('mtd-card');
+  if (!ok('mtd_total')) { card.hidden = true; return; }
+  const all = dash.data('mtd_total').data;
+  const ends = [...new Set(all.map((r) => r.period_end))].sort();
+  if (ends.length < 2) { card.hidden = true; return; }
+  card.hidden = false;
+  const [e0, e1] = ends.slice(-2);
+  const lab = (e) => `${+e.slice(5, 7)}/1〜${+e.slice(5, 7)}/${+e.slice(8)}`;
+  const d0 = all.find((r) => r.period_end === e0).days, d1 = all.find((r) => r.period_end === e1).days;
+  const addFrom = addDays(e0, 1);
+  const isTot = mtdState.mode === 'total';
+  el('mtd-title').textContent = `月の途中経過：${lab(e0)} と ${lab(e1)} の違い`;
+  el('mtd-note').textContent = isTot
+    ? `期間合計＝1日あたり×日数（${d0}日・${d1}日）。差は ${+addFrom.slice(5, 7)}/${+addFrom.slice(8)}〜${+e1.slice(5, 7)}/${+e1.slice(8)}（${d1 - d0}日）に増えた金額です。`
+    : `レポートの当月欄は1日あたりの値です。差は1日あたりの平均がどれだけ動いたかです。荒利率は荒利益高÷販売高。`;
+  el('mtd-mode').replaceChildren(...[['day', '1日あたり'], ['total', '期間合計']].map(([k, l]) => {
+    const b = document.createElement('button'); b.className = 'ac-chip'; b.type = 'button'; b.textContent = l; b.setAttribute('aria-pressed', String(k === mtdState.mode));
+    b.addEventListener('click', () => { mtdState.mode = k; draw(); }); return b;
+  }));
+  const order = ok('weekly_total') ? storeOrder(dash.data('weekly_total').data) : [...new Set(all.map((r) => r.store))];
+  const mult = (r) => (isTot ? r.days : 1);
+  const val = (r, f) => (f === 'loss' ? (+r.discount + +r.waste) : +r[f]) * mult(r);
+  // 大事な順：販売高 → 荒利益高 → 荒利率 → ロス（値引＋廃棄）→ 値引 → 廃棄
+  const M = [['sales', '販売高', 1], ['gross_profit', '荒利益高', 1], ['gp_rate', '荒利率', 1], ['loss', 'ロス額（値引＋廃棄）', -1], ['discount', '値引高', -1], ['waste', '廃棄高', -1], ['waste_rate', '廃棄率', -1]];
+  const dcls = (v, good) => (Math.round(v) === 0 ? '' : (v > 0) === (good > 0) ? 'ac-pos' : 'ac-neg');
+  const sg = (v) => (Math.round(v) > 0 ? '+' : Math.round(v) < 0 ? '−' : '±') + fInt(Math.abs(Math.round(v)));
+  const head = (first) => {
+    const r1 = document.createElement('tr'), r2 = document.createElement('tr');
+    const th0 = document.createElement('th'); th0.rowSpan = 2; th0.textContent = first; r1.append(th0);
+    M.map((m) => m[1]).forEach((h) => { const th = document.createElement('th'); th.colSpan = 3; th.className = 'grp sep'; th.textContent = h; r1.append(th); });
+    M.forEach(() => [lab(e0), lab(e1), '差'].forEach((h, i) => { const th = document.createElement('th'); th.textContent = h; if (i === 0) th.className = 'sep'; r2.append(th); }));
+    return [r1, r2];
+  };
+  const cells = (a, b) => {
+    const out = [];
+    M.forEach(([f, , good]) => {
+      if (f === 'gp_rate' || f === 'waste_rate') {
+        const num = f === 'gp_rate' ? 'gross_profit' : 'waste';
+        const ra = a && +a.sales ? +a[num] / +a.sales : null, rb = b && +b.sales ? +b[num] / +b.sales : null;
+        out.push(td(ra == null ? '—' : fRate(ra), 'sep'), td(rb == null ? '—' : fRate(rb)), ra == null || rb == null ? td('—') : td(fPt(rb - ra), 'd ' + (isZeroPt(rb - ra) ? '' : (rb > ra) === (good > 0) ? 'ac-pos' : 'ac-neg')));
+        return;
+      }
+      const va = a ? val(a, f) : null, vb = b ? val(b, f) : null;
+      const c0 = td(va == null ? '—' : fInt(Math.round(va)), 'sep'); out.push(c0, td(vb == null ? '—' : fInt(Math.round(vb))));
+      out.push(va == null || vb == null ? td('—') : td(sg(vb - va), 'd ' + dcls(vb - va, good)));
+    });
+    return out;
+  };
+  // 店舗別
+  const t = el('mtd-table');
+  t.querySelector('thead').replaceChildren(...head('店舗'));
+  const by = (e) => new Map(all.filter((r) => r.period_end === e).map((r) => [r.store, r]));
+  const A = by(e0), B = by(e1);
+  t.querySelector('tbody').replaceChildren(...order.filter((st) => A.has(st) || B.has(st)).map((st) => {
+    const tr = document.createElement('tr'); tr.dataset.key = (B.get(st) || A.get(st)).key;
+    const c0 = document.createElement('td'); const dot = document.createElement('span'); dot.className = 'ac-dot'; dot.style.background = dash.colors[order.indexOf(st) % dash.colors.length]; c0.append(dot, document.createTextNode(st)); c0.title = fullName(st);
+    tr.append(c0, ...cells(A.get(st), B.get(st))); return tr;
+  }));
+  // 2店合計（1日あたりは2店の1日あたりを足したもの）
+  const sum = (m) => { const rs = [...m.values()]; if (!rs.length) return null; const o = { days: rs[0].days }; ['sales', 'discount', 'waste', 'gross_profit'].forEach((f) => { o[f] = d3.sum(rs, (r) => +r[f]); }); return o; };
+  const fr = document.createElement('tr'); fr.append(td('2店合計'), ...cells(sum(A), sum(B)));
+  t.querySelector('tfoot').replaceChildren(fr);
+  // カテゴリ別
+  if (!mtdState.store || !order.includes(mtdState.store)) mtdState.store = order[0];
+  el('mtd-stores').replaceChildren(...order.map((st) => {
+    const b = document.createElement('button'); b.className = 'ac-chip'; b.type = 'button'; b.textContent = st; b.title = fullName(st); b.setAttribute('aria-pressed', String(st === mtdState.store));
+    b.addEventListener('click', () => { mtdState.store = st; draw(); }); return b;
+  }));
+  el('mtd-cat-title').textContent = `${mtdState.store}　カテゴリ別の違い（荒利益高の差が大きい順）`;
+  const ct = el('mtd-cat-table');
+  ct.querySelector('thead').replaceChildren(...head('カテゴリ'));
+  if (!ok('mtd_category')) { ct.querySelector('tbody').replaceChildren(); return; }
+  const cats = dash.data('mtd_category').data.filter((r) => r.store === mtdState.store);
+  const cA = new Map(cats.filter((r) => r.period_end === e0).map((r) => [r.category, r])), cB = new Map(cats.filter((r) => r.period_end === e1).map((r) => [r.category, r]));
+  const names = [...new Set(cats.map((r) => r.category))];
+  const gpd = (c) => { const a = cA.get(c), b = cB.get(c); return a && b ? Math.abs(val(b, 'gross_profit') - val(a, 'gross_profit')) : -1; };
+  names.sort((x, y) => gpd(y) - gpd(x));
+  ct.querySelector('tbody').replaceChildren(...names.map((c) => {
+    const tr = document.createElement('tr'); tr.dataset.key = (cB.get(c) || cA.get(c)).key;
+    tr.append(td(c), ...cells(cA.get(c), cB.get(c))); return tr;
+  }));
+}
+
+function drawMonth() {
+  drawMtd();
+  if (ok('monthly_total', 'month_rates')) {
+    const mt = dash.data('monthly_total').data, rates = new Map(dash.data('month_rates').data.map((r) => [r.key, r]));
+    const months = [...new Set(mt.map((r) => r.month))].sort();
+    if (!state.month || !months.includes(state.month)) state.month = months[months.length - 1];
+    el('month-pick').replaceChildren(...months.slice().reverse().map((m) => {
+      const b = document.createElement('button'); b.className = 'ac-chip'; b.type = 'button'; b.textContent = monthLabel(m); b.setAttribute('aria-pressed', String(m === state.month));
+      b.addEventListener('click', () => { state.month = m; draw(); }); return b;
+    }));
+    const prevM = months[months.indexOf(state.month) - 1];
+    const prevOf = new Map(mt.filter((r) => r.month === prevM).map((r) => [r.store, rates.get(r.key)]));
+    el('month-diff-h').hidden = !prevM;
+    if (prevM) el('month-diff-h').title = `${monthLabel(prevM)}との差`;
+    const rows = mt.filter((r) => r.month === state.month).sort((a, b) => rates.get(b.key).gp_rate - rates.get(a.key).gp_rate);
+    document.querySelector('#month-table tbody').replaceChildren(...rows.map((r) => {
+      const q = rates.get(r.key), tr = document.createElement('tr'); tr.dataset.key = r.key;
+      const c0 = td(r.store); c0.title = r.store_name || r.store;
+      tr.append(c0, td(rowMonthLabel(r)), td(fInt(r.sales)), td(fYoy(r.sales_yoy), yoyCls(r.sales_yoy)), td(fInt(r.discount)), td(fRate(q.discount_rate)), td(fInt(r.waste)), td(fRate(q.waste_rate)), td(fInt(q.loss)), td(fRate(q.loss_rate)), td(fSell(q.sell_rate)),
+        td(fInt(r.gross_profit)), td(fYoy(r.gp_yoy), yoyCls(r.gp_yoy)), (() => { const c = td(fRate(q.gp_rate)); c.style.fontWeight = '600'; return c; })());
+      if (prevM) { const pq = prevOf.get(r.store), dlt = pq ? q.gp_rate - pq.gp_rate : null; tr.append(td(dlt == null ? '—' : fPtX(dlt), dlt == null ? '' : dlt < 0 ? 'ac-neg' : 'ac-pos')); }
+      return tr;
+    }));
+  }
+  const mm = el('month-metric');
+  mm.replaceChildren(...[['gp_yoy', '荒利益高 前年比'], ['sales_yoy', '販売高 前年比']].map(([k, l]) => {
+    const b = document.createElement('button'); b.className = 'ac-chip'; b.type = 'button'; b.textContent = l; b.setAttribute('aria-pressed', String(state.metric === k));
+    b.addEventListener('click', () => { state.metric = k; draw(); }); return b;
+  }));
+  const box = el('month-trend');
+  el('month-trend-card').hidden = dash.data('monthly_trend').status === 'missing';
+  if (anyErr('monthly_trend')) { failLine(box); return; }
+  if (!ok('monthly_trend')) return;
+  const tr = dash.data('monthly_trend').data;
+  const weeklyOrder = ok('weekly_total') ? storeOrder(dash.data('weekly_total').data) : [];
+  const stores = [...new Set(tr.map((r) => r.store))];
+  const xs = [...new Set(tr.map((r) => r.month))].sort();
+  lineChart(box, {
+    xs, xLabel: (k) => `${+k.split('-')[1]}月`, ref: 100, fmt: (v) => (v == null ? '—' : `${Math.round(v)}%`),
+    series: stores.map((s) => {
+      const isComp = !weeklyOrder.includes(s);
+      return { name: isComp ? '比較店' : s, dash: isComp, color: isComp ? 'var(--color-fg-muted)' : dash.colors[weeklyOrder.indexOf(s) % dash.colors.length], values: new Map(tr.filter((r) => r.store === s).map((r) => [r.month, Number(r[state.metric])])) };
+    }),
+  });
+}
+
+
+/* ---------- 週別の比較 ---------- */
+const CMP = [
+  { id: 'cmp-discount', amt: 'discount', rate: 'discount_rate', yoy: null, lowGood: true,
+    opts: [['discount_rate', '値引率'], ['discount', '値引高']] },
+  { id: 'cmp-waste', amt: 'waste', rate: 'waste_rate', yoy: 'waste_yoy', yoyGood: 'low', lowGood: true,
+    opts: [['waste_rate', '廃棄率'], ['waste', '廃棄高'], ['waste_yoy', '廃棄前年比']] },
+  { id: 'cmp-gp', amt: 'gross_profit', rate: 'gp_rate', yoy: 'gp_yoy', yoyGood: 'high', lowGood: false,
+    opts: [['gp_rate', '荒利率'], ['gross_profit', '荒利益高'], ['gp_yoy', '荒利前年比']] },
+];
+const cmpSel = {};
+function drawCompare() {
+  if (!ok('weekly_total', 'store_week', 'week_sum')) return;
+  const wt = dash.data('weekly_total').data, rates = new Map(dash.data('store_week').data.map((r) => [r.key, r]));
+  const sums = new Map(dash.data('week_sum').data.map((r) => [r.week_start, r]));
+  const order = storeOrder(wt), weeks = [...new Set(wt.map((r) => r.week_start))].sort();
+  const endOf = new Map(wt.map((r) => [r.week_start, r.week_end]));
+  const idx = new Map(wt.map((r) => [r.store + '|' + r.week_start, r]));
+  const get = (s, w) => idx.get(s + '|' + w);
+  const mark = (n, src, field, key) => { n.dataset.source = src; n.dataset.field = field; n.dataset.where = `key=${encodeURIComponent(key)}`; };
+  CMP.forEach((c) => {
+    const card = el(c.id);
+    if (!cmpSel[c.id]) cmpSel[c.id] = c.opts[0][0];
+    const sel = cmpSel[c.id];
+    card.querySelector('.ac-chips').replaceChildren(...c.opts.map(([k, l]) => {
+      const b = document.createElement('button'); b.className = 'ac-chip'; b.type = 'button'; b.textContent = l; b.setAttribute('aria-pressed', String(k === sel));
+      b.addEventListener('click', () => { cmpSel[c.id] = k; draw(); }); return b;
+    }));
+    // chart
+    const isRate = sel.endsWith('_rate'), isYoy = sel.endsWith('_yoy');
+    const valOf = (r) => (isRate ? rates.get(r.key)[sel] : Number(r[sel]));
+    lineChart(card.querySelector('.ac-chart'), {
+      xs: weeks, xLabel: (k) => wkLabel(k, endOf.get(k)), xShort: wkShort, ref: isYoy ? 100 : null,
+      fmt: (v) => (v == null ? '—' : isRate ? d3.format('.1%')(v) : isYoy ? `${Math.round(v)}%` : fInt(Math.round(v))),
+      series: order.map((s, i) => ({ name: s, color: dash.colors[i % dash.colors.length], values: new Map(weeks.map((w) => { const r = get(s, w); return [w, r ? valOf(r) : null]; })) })),
+    });
+    // matrix table: rows = stores, cols = weeks
+    const t = card.querySelector('table');
+    const hr = document.createElement('tr');
+    hr.append(...['店舗', ...weeks.map((w) => wkLabel(w, endOf.get(w)))].map((h) => { const th = document.createElement('th'); th.textContent = h; return th; }));
+    t.querySelector('thead').replaceChildren(hr);
+    // best / worst per week by rate
+    const rank = new Map();
+    weeks.forEach((w) => {
+      const vals = order.map((s) => { const r = get(s, w); return r ? [s, rates.get(r.key)[c.rate]] : null; }).filter(Boolean).sort((a, b) => a[1] - b[1]);
+      if (vals.length > 1) rank.set(w, c.lowGood ? { best: vals[0][0], worst: vals[vals.length - 1][0] } : { best: vals[vals.length - 1][0], worst: vals[0][0] });
+    });
+    t.querySelector('tbody').replaceChildren(...order.map((s, i) => {
+      const tr = document.createElement('tr');
+      const c0 = document.createElement('td'); const dot = document.createElement('span'); dot.className = 'ac-dot'; dot.style.background = dash.colors[i % dash.colors.length];
+      c0.append(dot, document.createTextNode(s)); c0.title = fullName(s); tr.append(c0);
+      weeks.forEach((w) => {
+        const r = get(s, w), cell = document.createElement('td');
+        if (r) {
+          const q = rates.get(r.key);
+          const v = document.createElement('span'); v.className = 'v'; v.textContent = fInt(r[c.amt]); mark(v, 'weekly_total', c.amt, r.key);
+          const sub = document.createElement('span'); sub.className = 's';
+          const rt = document.createElement('span'); rt.textContent = fRate(q[c.rate]); mark(rt, 'store_week', c.rate, r.key); sub.append(rt);
+          if (c.yoy) {
+            const y = document.createElement('span'); y.textContent = ` ／ 前年比 ${fYoy(r[c.yoy])}`; mark(y, 'weekly_total', c.yoy, r.key);
+            if (c.yoyGood === 'high' && Number(r[c.yoy]) < 100) y.className = 'ac-neg';
+            sub.append(y);
+          }
+          cell.append(v, sub);
+          const rk = rank.get(w);
+          if (rk && rk.worst === s) cell.classList.add('worst');
+          if (rk && rk.best === s) cell.classList.add('best');
+        } else cell.textContent = '—';
+        tr.append(cell);
+      });
+      return tr;
+    }));
+    // total row
+    const fr = document.createElement('tr'); fr.append(td('2店合計'));
+    weeks.forEach((w) => {
+      const sm = sums.get(w), cell = document.createElement('td');
+      if (sm) {
+        const amt = c.amt === 'gross_profit' ? sm.gross_profit : sm[c.amt];
+        const v = document.createElement('span'); v.className = 'v'; v.textContent = fInt(amt);
+        v.dataset.source = 'week_sum'; v.dataset.field = c.amt; v.dataset.where = `week_start=${w}`;
+        const sub = document.createElement('span'); sub.className = 's'; sub.textContent = fRate(amt / sm.sales);
+        cell.append(v, sub);
+      }
+      fr.append(cell);
+    });
+    t.querySelector('tfoot').replaceChildren(fr);
+  });
+}
+
+
+/* ---------- 改善シミュレーション ---------- */
+el('sim-ratio').addEventListener('input', () => drawSim());
+function fitChart(box, pts, m, order) {
+  box.replaceChildren();
+  const W = Math.max(280, box.clientWidth), H = 300, mg = { l: 52, r: 24, t: 14, b: 48 };
+  const x = d3.scaleLinear([d3.min(pts, (p) => p.x) - 0.01, d3.max(pts, (p) => p.x) + 0.01], [mg.l, W - mg.r]).nice();
+  const y = d3.scaleLinear([d3.min(pts, (p) => p.y) - 0.01, d3.max(pts, (p) => p.y) + 0.01], [H - mg.b, mg.t]).nice();
+  const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('role', 'img').attr('aria-label', 'グラフ：店週ごとのロス率と荒利率、回帰式の線');
+  svg.selectAll(null).data(y.ticks(5)).join('line').attr('x1', mg.l).attr('x2', W - mg.r).attr('y1', y).attr('y2', y).style('stroke', 'var(--cds-chart-grid)');
+  svg.selectAll(null).data(y.ticks(5)).join('text').attr('x', mg.l - 6).attr('y', (d) => y(d) + 4).attr('text-anchor', 'end').attr('font-size', 12).style('fill', 'var(--color-fg-muted)').text(d3.format('.0%'));
+  svg.selectAll(null).data(x.ticks(6)).join('text').attr('x', x).attr('y', H - mg.b + 20).attr('text-anchor', 'middle').attr('font-size', 12).style('fill', 'var(--color-fg-muted)').text(d3.format('.0%'));
+  svg.append('text').attr('x', (mg.l + W - mg.r) / 2).attr('y', H - 6).attr('text-anchor', 'middle').attr('font-size', 12).style('fill', 'var(--color-fg-muted)').text('ロス率（値引＋廃棄）÷販売高');
+  svg.append('text').attr('transform', `translate(12,${(mg.t + H - mg.b) / 2}) rotate(-90)`).attr('text-anchor', 'middle').attr('font-size', 12).style('fill', 'var(--color-fg-muted)').text('荒利率');
+  // fitted line using the average loss coefficient
+  const k = (m.coef_discount + m.coef_waste) / 2, [x0, x1] = x.domain();
+  svg.append('line').attr('x1', x(x0)).attr('x2', x(x1)).attr('y1', y(m.base_gp_rate + k * x0)).attr('y2', y(m.base_gp_rate + k * x1)).style('stroke', 'var(--cds-chart-reference)').attr('stroke-dasharray', '5 4').attr('stroke-width', 1.5);
+  const tip = makeTip(box);
+  pts.forEach((p) => {
+    svg.append('circle').attr('cx', x(p.x)).attr('cy', y(p.y)).attr('r', 5.5).style('fill', dash.colors[order.indexOf(p.store) % dash.colors.length]).attr('opacity', 0.9)
+      .call(hoverOn, () => { const s = box.clientWidth / W; tip.show(x(p.x) * s, y(p.y) * s, `${p.store} ${p.week}`, [[null, 'ロス率', fRate(p.x)], [null, '荒利率', fRate(p.y)]]); }, () => tip.hide());
+  });
+  const lg = svg.append('g').attr('transform', `translate(${W - mg.r - 8},${mg.t + 6})`);
+  order.forEach((s, i) => {
+    const gy = i * 16;
+    lg.append('circle').attr('cx', -60).attr('cy', gy).attr('r', 4).style('fill', dash.colors[i % dash.colors.length]);
+    lg.append('text').attr('x', -50).attr('y', gy + 4).attr('font-size', 12).style('fill', 'var(--color-fg)').text(s);
+  });
+}
+function drawSim() {
+  if (!ok('gp_model', 'store_week', 'weekly_total', 'opportunity')) return;
+  const m = dash.data('gp_model').data[0];
+  const order = storeOrder(dash.data('weekly_total').data);
+  const kd = m.gain_per_discount_yen, kw = m.gain_per_waste_yen;
+  el('sim-k').textContent = `約${Math.round(((kd + kw) / 2) * 100)}円`;
+  const ratio = +el('sim-ratio').value / 100;
+  const mon = dash.data('opportunity').data[0]?.month;
+  if (mon) el('sim-basis').textContent = `金額は${monthLabel(mon)}の月計（1日あたり）をもとにしています。`;
+  el('sim-ratio-o').textContent = `${Math.round(ratio * 10)}割`;
+  const gainOf = (d, w) => ratio * (d * kd + w * kw);
+  // store table
+  const rows = dash.data('opportunity').data.map((r) => ({ ...r, cut: ratio * r.loss_day, gain: gainOf(r.discount, r.waste) })).sort((a, b) => b.gain - a.gain);
+  const max = d3.max(rows, (r) => r.gain) || 1;
+  document.querySelector('#sim-table tbody').replaceChildren(...rows.map((r) => {
+    const tr = document.createElement('tr'); tr.dataset.key = r.key;
+    const c0 = document.createElement('td'); const dot = document.createElement('span'); dot.className = 'ac-dot'; dot.style.background = dash.colors[order.indexOf(r.store) % dash.colors.length];
+    c0.append(dot, document.createTextNode(r.store)); c0.title = fullName(r.store);
+    const bc = document.createElement('td'); bc.className = 'ac-barcell ac-hide-sm'; const bar = document.createElement('div'); bar.className = 'ac-bar'; bar.style.width = `${(r.gain / max) * 100}%`; bc.append(bar);
+    tr.append(c0, td(fInt(r.loss_day)), td(`−${fInt(Math.round(r.cut))}`), td(`+${fInt(Math.round(r.gain))}`, 'gain'), td(`+${fInt(Math.round(r.gain * 30))}`, 'gain'), bc);
+    return tr;
+  }));
+  // category top 3 per store
+  if (ok('cat_opportunity')) {
+    const cats = dash.data('cat_opportunity').data;
+    const best = d3.min(rows, (r) => r.loss_rate);
+    el('sim-cat-grid').replaceChildren(...rows.map((r) => {
+      const box = document.createElement('div'); box.className = 'ac-store';
+      const h = document.createElement('h3'); h.textContent = r.store;
+      const meta = document.createElement('div'); meta.className = 'meta';
+      meta.textContent = `ロス率 ${fRate(r.loss_rate)}` + (r.loss_rate > best ? `（一番低い店より +${((r.loss_rate - best) * 100).toFixed(1)}pt）` : '（2店で一番低い）');
+      const ol = document.createElement('ol');
+      cats.filter((c) => c.store === r.store).sort((a, b) => b.loss - a.loss).slice(0, 3).forEach((c) => {
+        const li = document.createElement('li');
+        const g = document.createElement('b'); g.textContent = `+${fInt(Math.round(gainOf(c.discount, c.waste)))}／日`;
+        const sp = document.createElement('span'); sp.textContent = `（ロス ${fInt(c.loss)}／日 → ${Math.round(ratio * 10)}割減で）`;
+        li.append(`${c.category} `, g, ' ', sp); ol.append(li);
+      });
+      box.append(h, meta, ol); return box;
+    }));
+  }
+  // details
+  const set = (id, t) => { el(id).textContent = t; };
+  set('m-bd', `${kd.toFixed(2)}円`); set('m-bw', `${kw.toFixed(2)}円`);
+  set('m-r2', m.r2.toFixed(3)); set('m-n', String(m.n)); set('m-mae', `${m.mae_pt.toFixed(2)}pt`);
+  if (el('model-card').open) {
+    const wt = dash.data('weekly_total').data, wkOf = new Map(wt.map((r) => [r.key, wkLabel(r.week_start, r.week_end)]));
+    fitChart(el('fit-chart'), dash.data('store_week').data.map((r) => ({ x: r.loss_rate, y: r.gp_rate, store: r.store, week: wkOf.get(r.key) })), m, order);
+  }
+}
+el('model-card').addEventListener('toggle', () => drawSim());
+
+/* ---------- 本部支援 ---------- */
+const supState = { store: null };
+function drawSupport() {
+  if (!ok('support_period', 'support_weekly')) return;
+  const sp = dash.data('support_period').data, ours = sp.filter((r) => r.our_store);
+  const L = d3.sum(ours, (r) => r.loss_28d), SB = d3.sum(ours, (r) => r.support_baika_28d), BB = d3.sum(ours, (r) => r.support_B);
+  const yen = (v) => `${fInt(Math.round(v))}円`;
+  el('sup-head').replaceChildren('2店で28日間に出たロスは ', (() => { const s = document.createElement('b'); s.textContent = yen(L); return s; })(), '。そのうち本部支援で戻ったのは ', (() => { const s = document.createElement('b'); s.textContent = `${yen(SB)}（${fRate(SB / L)}）`; return s; })(), `。残りの${fRate(1 - SB / L)}はお店の負担です。`);
+  const per = ours[0] && ours[0].period ? ours[0].period.split('〜') : null;
+  const days = per ? Math.round((new Date(per[1]) - new Date(per[0])) / 864e5) + 1 : 28;
+  el('sup-table-title').textContent = per ? `店舗ごと：ロスと支援（${wkLabel(per[0], per[1])}、${days}日）` : '店舗ごと：ロスと支援';
+  el('sup-k1').textContent = yen(L); el('sup-k2').textContent = yen(SB); el('sup-k2s').textContent = `ロスの ${fRate(SB / L)}`; el('sup-k3').textContent = yen(BB); el('sup-k4').textContent = yen(L - SB);
+  const order = ok('weekly_total') ? storeOrder(dash.data('weekly_total').data) : [];
+  document.querySelector('#sup-table tbody').replaceChildren(...ours.slice().sort((a, b) => b.cover_rate - a.cover_rate).map((r) => {
+    const tr = document.createElement('tr'); tr.dataset.key = r.key;
+    const c0 = document.createElement('td'); const dot = document.createElement('span'); dot.className = 'ac-dot'; dot.style.background = dash.colors[Math.max(0, order.indexOf(r.store)) % dash.colors.length]; c0.append(dot, document.createTextNode(r.store));
+    const verdict = r.gp_after_yoy < 100 && r.loss_after_yoy > 100 ? ['要改善：支援込みでも前年割れ', 'ac-neg'] : r.gp_after_yoy < 100 ? ['荒利が前年割れ', 'ac-neg'] : ['良好', 'ac-pos'];
+    tr.append(c0, td(fInt(r.loss_28d)), td(fInt(r.support_baika_28d)), td(fRate(r.cover_rate)), td(fInt(r.support_B)), td(fRate(r.gp_rate)), td(fRate(r.gp_after_rate)),
+      td(fYoy1(r.gp_after_yoy), r.gp_after_yoy < 100 ? 'ac-neg' : ''), td(fYoy1(r.loss_after_yoy), r.loss_after_yoy > 100 ? 'ac-neg' : 'ac-pos'), td(verdict[0], verdict[1]));
+    return tr;
+  }));
+  // weekly
+  const sw = dash.data('support_weekly').data, inSw = new Set(sw.map((r) => r.store));
+  const stores = [...order.filter((s) => inSw.has(s)), ...[...inSw].filter((s) => !order.includes(s))];
+  if (!supState.store || !stores.includes(supState.store)) supState.store = stores[0];
+  el('sup-stores').replaceChildren(...stores.map((s) => { const b = document.createElement('button'); b.className = 'ac-chip'; b.type = 'button'; b.textContent = s; b.setAttribute('aria-pressed', String(s === supState.store)); b.addEventListener('click', () => { supState.store = s; draw(); }); return b; }));
+  el('sup-week-title').textContent = `${supState.store}　週ごとのロスと支援`;
+  const mine = sw.filter((r) => r.store === supState.store).sort((a, b) => a.week_start.localeCompare(b.week_start));
+  const box = el('sup-chart'); box.replaceChildren();
+  const W = Math.max(300, box.clientWidth), H = 300, m = { l: 56, r: 12, t: 12, b: 34 };
+  const x = d3.scaleBand(mine.map((r) => r.week_start), [m.l, W - m.r]).padding(0.25);
+  const y = d3.scaleLinear([0, d3.max(mine, (r) => r.loss) * 1.08], [H - m.b, m.t]).nice();
+  const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('role', 'img');
+  svg.selectAll(null).data(y.ticks(5)).join('line').attr('x1', m.l).attr('x2', W - m.r).attr('y1', y).attr('y2', y).style('stroke', 'var(--cds-chart-grid)');
+  svg.selectAll(null).data(y.ticks(5)).join('text').attr('x', m.l - 6).attr('y', (d) => y(d) + 4).attr('text-anchor', 'end').attr('font-size', 11).style('fill', 'var(--color-fg-muted)').text(d3.format(','));
+  const step = Math.ceil(mine.length / 8);
+  svg.selectAll(null).data(mine.filter((r, i) => i % step === 0 || i === mine.length - 1)).join('text').attr('x', (r) => x(r.week_start) + x.bandwidth() / 2).attr('y', H - 12).attr('text-anchor', 'middle').attr('font-size', 11).style('fill', 'var(--color-fg-muted)').text((r) => `${+r.week_start.slice(5, 7)}/${+r.week_start.slice(8)}`);
+  const tip = makeTip(box), col = dash.colors[Math.max(0, order.indexOf(supState.store)) % dash.colors.length];
+  mine.forEach((r) => {
+    const g = svg.append('g');
+    g.append('rect').attr('x', x(r.week_start)).attr('width', x.bandwidth()).attr('y', y(r.loss)).attr('height', y(0) - y(r.loss)).attr('rx', 3).style('fill', 'var(--cds-chart-muted)').attr('opacity', 0.55);
+    g.append('rect').attr('x', x(r.week_start)).attr('width', x.bandwidth()).attr('y', y(r.support_baika)).attr('height', y(0) - y(r.support_baika)).attr('rx', 3).style('fill', col);
+    g.call(hoverOn, () => { const s = box.clientWidth / W; tip.show((x(r.week_start) + x.bandwidth()) * s, y(r.loss) * s, `${wkLabel(r.week_start, addDays(r.week_start, 6))}`, [[null, 'ロス', fInt(r.loss)], [col, '支援', fInt(r.support_baika)], [null, 'カバー率', r.loss ? fRate(r.support_baika / r.loss) : '—']]); }, () => tip.hide());
+  });
+  document.querySelector('#sup-week-table tbody').replaceChildren(...mine.slice().reverse().map((r) => {
+    const tr = document.createElement('tr'); tr.dataset.key = r.key;
+    tr.append(td(wkLabel(r.week_start, addDays(r.week_start, 6))), td(fInt(r.sales)), td(fInt(r.loss)), td(fInt(r.support_baika)), td(r.loss ? fRate(r.support_baika / r.loss) : '—'), td(fInt(r.gp)), td(fInt(r.gp_after)), td(fYoy1(r.gp_after_yoy), yoyCls(r.gp_after_yoy)), td(fYoy1(r.loss_after_yoy), r.loss_after_yoy > 100 ? 'ac-neg' : 'ac-pos'));
+    return tr;
+  }));
+}
+
+/* ---------- ドライバ検証 ---------- */
+const DRV = { sell: 0.90, loss: 0.08 };
+const DRV_L = { up: ['▲ 上げるべき', '▲上げる', '▲'], hold: ['→ 上げない', '→上げない', '→'], down: ['▼ 下げる検討', '▼下げる', '▼'], over: ['SKU多い：まず絞る', 'SKU多い', 'S'], sku: ['SKU不足：まず100%に', 'SKU不足', 'S'] };
+const drvState = { store: null };
+function drvJudge(r) {
+  const s = +r.sales, d = +r.discount, w = +r.waste;
+  if (!(s > 0)) return null;
+  const sell = s / (s + d + w), lr = (d + w) / s, sku = r.sku_rate == null ? null : +r.sku_rate;
+  let k;
+  // 上げるのは「販売率90%超・採用SKU100%以下・ロス率（値引＋廃棄）÷販売高 8%以下」がそろったときだけ
+  if (sell > DRV.sell) k = sku != null && sku > 100 ? 'over' : lr <= DRV.loss ? 'up' : 'hold';
+  else if (sku == null) k = 'sku';
+  else k = sku < 100 ? 'sku' : sku > 100 ? 'over' : 'down';
+  return { k, sell, lr, sku };
+}
+function drawDriver() {
+  if (!ok('weekly_total', 'weekly_category')) return;
+  const wt = dash.data('weekly_total').data, wc = dash.data('weekly_category').data, order = storeOrder(wt);
+  const weeks = [...new Set(wt.map((r) => r.week_start))].sort();
+  const W = weeks.includes(state.week) ? state.week : weeks[weeks.length - 1];
+  const endOf = new Map(wt.map((r) => [r.week_start, r.week_end]));
+  const idx = new Map(wc.map((r) => [r.store + '|' + r.week_start + '|' + r.category, r]));
+  const cats = [...new Set(wc.map((r) => r.category))];
+  const cur = wc.filter((r) => r.week_start === W);
+  const cnt = { up: 0, down: 0, over: 0, sku: 0, hold: 0 };
+  cur.forEach((r) => { const j = drvJudge(r); if (j) cnt[j.k] += 1; });
+  el('drv-eyebrow').textContent = `ドライバ検証　${wkLabel(W, endOf.get(W))}　2店×カテゴリ`;
+  const b = (t, c) => { const x = document.createElement('b'); x.textContent = t; x.className = c; return x; };
+  el('drv-head').replaceChildren('上げるべき ', b(`${cnt.up}件`, 'ac-pos'), '・下げる検討 ', b(`${cnt.down}件`, 'ac-neg'), '・SKUの確認 ', b(`${cnt.sku + cnt.over}件`, ''), '。');
+  if (!drvState.store || !order.includes(drvState.store)) drvState.store = order[0];
+  // マトリクス
+  const t = el('drv-matrix');
+  const hr = document.createElement('tr'); ['カテゴリ', ...order].forEach((h) => { const th = document.createElement('th'); th.textContent = h; hr.append(th); });
+  t.querySelector('thead').replaceChildren(hr);
+  el('drv-matrix-title').textContent = `カテゴリ × 店舗の判定（${wkLabel(W, endOf.get(W))}）`;
+  t.querySelector('tbody').replaceChildren(...cats.map((c) => {
+    const tr = document.createElement('tr'); tr.append(td(c));
+    order.forEach((st) => {
+      const r = idx.get(st + '|' + W + '|' + c), j = r && drvJudge(r), cell = document.createElement('td');
+      if (j) {
+        const tag = document.createElement('span'); tag.className = 'ac-drv ' + j.k; tag.textContent = DRV_L[j.k][1];
+        const rr = document.createElement('span'); rr.className = 'r'; rr.textContent = fRate(j.sell);
+        cell.append(tag, rr); cell.title = `${st} ${c}：販売率 ${fRate(j.sell)}・ロス率 ${fRate(j.lr)}・採用SKU ${j.sku == null ? '—' : j.sku + '%'}`;
+        cell.addEventListener('click', () => { drvState.store = st; draw(); el('drv-detail-card').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+      } else cell.textContent = '—';
+      tr.append(cell);
+    });
+    return tr;
+  }));
+  // 店舗の詳細
+  el('drv-stores').replaceChildren(...order.map((st) => {
+    const x = document.createElement('button'); x.className = 'ac-chip'; x.type = 'button'; x.textContent = st; x.title = fullName(st); x.setAttribute('aria-pressed', String(st === drvState.store));
+    x.addEventListener('click', () => { drvState.store = st; draw(); }); return x;
+  }));
+  el('drv-detail-title').textContent = `${drvState.store}　カテゴリ別の判定`;
+  const last4 = weeks.filter((w) => w <= W).slice(-4);
+  const rank = { up: 0, down: 1, over: 2, sku: 3, hold: 4 };
+  const rows = cats.map((c) => ({ c, r: idx.get(drvState.store + '|' + W + '|' + c) })).filter((x) => x.r).map((x) => ({ ...x, j: drvJudge(x.r) })).filter((x) => x.j)
+    .sort((a, z) => rank[a.j.k] - rank[z.j.k] || z.r.sales - a.r.sales);
+  el('drv-table').querySelector('tbody').replaceChildren(...rows.map(({ c, r, j }) => {
+    const tr = document.createElement('tr'); tr.dataset.key = r.key;
+    const v = document.createElement('td'); const tag = document.createElement('span'); tag.className = 'ac-drv ' + j.k; tag.textContent = DRV_L[j.k][0]; v.append(tag);
+    const h = document.createElement('td'); h.className = 'ac-drv-hist';
+    last4.forEach((w) => { const rw = idx.get(drvState.store + '|' + w + '|' + c), jw = rw && drvJudge(rw); const sp = document.createElement('span'); sp.className = jw ? jw.k : ''; sp.textContent = jw ? DRV_L[jw.k][2] : '・'; sp.title = `${wkLabel(w, endOf.get(w))}：${jw ? DRV_L[jw.k][0] + '（販売率 ' + fRate(jw.sell) + '）' : 'データなし'}`; h.append(sp); });
+    tr.append(td(c), td(fInt(r.sales)), td(fInt(r.discount)), td(fInt(r.waste)),
+      td(fRate(j.sell), j.sell > DRV.sell ? 'ac-pos' : 'ac-neg'), td(fRate(j.lr), j.lr > DRV.loss ? 'ac-neg' : 'ac-pos'),
+      td(j.sku == null ? '—' : `${j.sku}%`, j.sku != null && j.sku !== 100 ? 'ac-neg' : ''), v, h);
+    return tr;
+  }));
+}
+
+function draw() {
+  drawHeader();
+  if (state.page === 'overview') drawOverview();
+  if (state.page === 'compare') drawCompare();
+  if (state.page === 'sim') drawSim();
+  if (state.page === 'support') drawSupport();
+  if (state.page === 'store') drawStore();
+  if (state.page === 'month') drawMonth();
+  if (state.page === 'driver') drawDriver();
+  // グラフ（svg role=img）に、カードの見出しを読み上げ用の名前として付ける
+  document.querySelectorAll('.ac-page:not([hidden]) svg[role="img"]').forEach((svg) => {
+    const h = svg.closest('.ac-card')?.querySelector('h2');
+    if (h) svg.setAttribute('aria-label', `グラフ：${h.textContent.trim()}`);
+  });
+}
+
+/* ---------- パスワード画面 ---------- */
+/* データは暗号化して置いている（tools/build_site_data.mjs）。パスワードが合ったときだけ復号して表示する。 */
+(() => {
+  const form = el('lock'), pw = el('lock-pw'), err = el('lock-err'), go = el('lock-go');
+  const enc = window.AICO_ENC;
+  const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  const decrypt = async (pass) => {
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']);
+    const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: unb64(enc.salt), iterations: enc.iter, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(enc.iv) }, key, unb64(enc.ct));
+    return JSON.parse(new TextDecoder().decode(plain));
+  };
+  const busy = (on) => { go.disabled = on; pw.disabled = on; go.textContent = on ? '確認中…' : '開く'; form.setAttribute('aria-busy', String(on)); };
+  if (!enc) { err.textContent = 'データを読み込めませんでした。ページを再読み込みしてください。'; go.disabled = true; return; }
+  if (!window.crypto || !crypto.subtle) { err.textContent = 'このブラウザでは開けません（https のページで開いてください）。'; go.disabled = true; return; }
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pass = pw.value.trim();
+    if (!pass) { err.textContent = 'パスワードを入力してください。'; pw.focus(); return; }
+    busy(true); err.textContent = '';
+    let data = null;
+    try { data = await decrypt(pass); } catch (e2) { data = null; }
+    busy(false);
+    if (!data) { err.textContent = 'パスワードが違います。'; pw.select(); return; }
+    form.hidden = true; el('ac-main').hidden = false;
+    dash.load(data);
+    el('title').focus({ preventScroll: true });
+  });
+  pw.addEventListener('input', () => { err.textContent = ''; });
+  pw.focus();
+})();
+
+dash.onData(draw);
+
+const named = location.hash.slice(1);
+setPage(tabs.some((b) => b.dataset.page === named) ? named : 'overview');
+</script>
+
 </body>
 </html>
